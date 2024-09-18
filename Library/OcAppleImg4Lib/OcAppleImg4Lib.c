@@ -357,7 +357,7 @@ OcAppleImg4BootstrapValues (
   mEnvInfo.ecid                      = Ecid;
   mEnvInfo.boardId                   = SbInfo->BoardId;
   mEnvInfo.chipId                    = 0x8012;
-  mEnvInfo.certificateEpoch          = 2;
+  mEnvInfo.certificateEpoch          = 1;
   mEnvInfo.securityDomain            = 1;
   mEnvInfo.productionStatus          = TRUE;
   mEnvInfo.securityMode              = 1;
