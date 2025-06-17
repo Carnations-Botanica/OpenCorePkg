@@ -48,7 +48,9 @@ OcPlatformUpdateDataHub (
   EFI_GUID               Uuid;
   UINT64                 StartupPowerEvents;
   UINT64                 InitialTSC;
+  UINT32                 CoprocessorVersion;
   EFI_DATA_HUB_PROTOCOL  *DataHub;
+  CONST CHAR8            *SecureBootModel;
 
   DataHub = OcDataHubInstallProtocol (FALSE);
   if (DataHub == NULL) {
@@ -152,7 +154,16 @@ OcPlatformUpdateDataHub (
     StartupPowerEvents        = 0;
     Data.StartupPowerEvents   = &StartupPowerEvents;
     InitialTSC                = 0;
+    CoprocessorVersion        = 0;
     Data.InitialTSC           = &InitialTSC;
+
+    SecureBootModel = OC_BLOB_GET (&Config->Misc.Security.SecureBootModel);
+    if (!((AsciiStrCmp (SecureBootModel, OC_SB_MODEL_DEFAULT) == 0) || (SecureBootModel[0] == '\0'))) {
+      // ZORMEISTER: I should probably make this toggleable for debugging.
+      CoprocessorVersion = 0x20000;
+      Data.CoprocessorVersion = &CoprocessorVersion;
+    }
+
     Data.DevicePathsSupported = &MacInfo->DataHub.DevicePathsSupported[0];
 
     Data.SmcRevision = &MacInfo->DataHub.SmcRevision[0];
