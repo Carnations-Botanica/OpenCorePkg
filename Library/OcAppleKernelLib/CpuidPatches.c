@@ -2259,11 +2259,11 @@ PatchProvideCurrentCpuInfo (
   }
 
   //
-  // Patch MSR 0x35 fallback value on 10.13 and above.
+  // Patch MSR 0x35 fallback value on 10.4 and above.
   //
   // This value is used if the MSR 0x35 is read as zero, typically on VMs or AMD processors.
   //
-  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_HIGH_SIERRA_MIN, 0)) {
+  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_TIGER_MIN, 0)) {
     //
     // 10.15 and above have two instances that need patching.
     //
@@ -2291,9 +2291,9 @@ PatchProvideCurrentCpuInfo (
   }
 
   //
-  // Disable _x86_validate_topology on 10.13 and above.
+  // Disable _x86_validate_topology on 10.12 and above.
   //
-  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_HIGH_SIERRA_MIN, 0)) {
+  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_SIERRA_MIN, 0)) {
     Status = PatcherApplyGenericPatch (
                Patcher,
                &mProvideCurrentCpuInfoTopologyValidationPatch

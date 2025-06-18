@@ -1,6 +1,8 @@
 .DS_Store
 UDK
 Binaries
+commit.sh
+push.sh
 build
 DerivedData
 xcshareddata
