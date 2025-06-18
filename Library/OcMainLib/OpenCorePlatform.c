@@ -16,6 +16,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include <Protocol/DataHub.h>
 
+#include <Library/OcAppleImg4Lib.h>
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
 #include <Library/OcMacInfoLib.h>
@@ -158,9 +159,14 @@ OcPlatformUpdateDataHub (
     Data.InitialTSC           = &InitialTSC;
 
     SecureBootModel = OC_BLOB_GET (&Config->Misc.Security.SecureBootModel);
-    if (!((AsciiStrCmp (SecureBootModel, OC_SB_MODEL_DEFAULT) == 0) || (SecureBootModel[0] == '\0'))) {
-      // ZORMEISTER: I should probably make this toggleable for debugging.
-      CoprocessorVersion = 0x20000;
+
+    // 
+    // Set the coprocessor (iBridge) version to the T2 if Apple Secure Boot is enabled.
+    //
+    if (!((AsciiStrCmp (SecureBootModel, OC_SB_MODEL_DEFAULT) == 0) || (SecureBootModel[0] == '\0') 
+        || (AsciiStrCmp (SecureBootModel, OC_SB_MODEL_LEGACY) == 0)))
+    {
+      CoprocessorVersion      = 0x20000;
       Data.CoprocessorVersion = &CoprocessorVersion;
     }
 
