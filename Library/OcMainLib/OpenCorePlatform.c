@@ -150,20 +150,20 @@ OcPlatformUpdateDataHub (
       Data.SystemUUID = &Uuid;
     }
 
-    Data.BoardProduct         = MacInfo->DataHub.BoardProduct;
-    Data.BoardRevision        = &MacInfo->DataHub.BoardRevision[0];
-    StartupPowerEvents        = 0;
-    Data.StartupPowerEvents   = &StartupPowerEvents;
-    InitialTSC                = 0;
-    CoprocessorVersion        = 0;
-    Data.InitialTSC           = &InitialTSC;
+    Data.BoardProduct       = MacInfo->DataHub.BoardProduct;
+    Data.BoardRevision      = &MacInfo->DataHub.BoardRevision[0];
+    StartupPowerEvents      = 0;
+    Data.StartupPowerEvents = &StartupPowerEvents;
+    InitialTSC              = 0;
+    CoprocessorVersion      = 0;
+    Data.InitialTSC         = &InitialTSC;
 
     SecureBootModel = OC_BLOB_GET (&Config->Misc.Security.SecureBootModel);
 
     // 
     // Set the coprocessor (iBridge) version to the T2 if Apple Secure Boot is enabled.
     //
-    if (!((AsciiStrCmp (SecureBootModel, OC_SB_MODEL_DEFAULT) == 0) || (SecureBootModel[0] == '\0') 
+    if (!( (AsciiStrCmp (SecureBootModel, OC_SB_MODEL_DEFAULT) == 0) || (SecureBootModel[0] == '\0') 
         || (AsciiStrCmp (SecureBootModel, OC_SB_MODEL_LEGACY) == 0)))
     {
       CoprocessorVersion      = 0x20000;
