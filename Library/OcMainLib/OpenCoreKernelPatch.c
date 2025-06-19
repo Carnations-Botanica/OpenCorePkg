@@ -29,26 +29,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 
-#define MAX_PATCH_DEBUG_BYTES 32
-
-typedef struct {
-  UINTN   LastAppliedOffset;
-  UINT32  LastAppliedSize;
-  UINT8   LastOriginalBytes[MAX_PATCH_DEBUG_BYTES];
-  UINT8   LastPatchedBytes[MAX_PATCH_DEBUG_BYTES];
-  BOOLEAN Valid;
-} PATCHER_DEBUG_INFO;
-
-extern PATCHER_DEBUG_INFO mPatcherDebugInfo;
-
-VOID
-SPrintByteSlice (
-  OUT CHAR8  *Dest,
-  IN  UINTN  DestSize,
-  IN  UINT8  *Bytes,
-  IN  UINT32 NumBytes
-  );
-
 EFI_STATUS
 OcKernelApplyQuirk (
   IN     KERNEL_QUIRK_NAME  Quirk,
@@ -383,9 +363,6 @@ OcKernelApplyPatches (
     Patch.Skip  = UserPatch->Skip;
     Patch.Limit = UserPatch->Limit;
 
-    ZeroMem(&mPatcherDebugInfo, sizeof(mPatcherDebugInfo));
-    mPatcherDebugInfo.Valid = FALSE;
-
     if (IsKernelPatch) {
       Status = PatcherApplyGenericPatch (&KernelPatcher, &Patch);
     } else {
@@ -400,49 +377,15 @@ OcKernelApplyPatches (
       }
     }
 
-    if (EFI_ERROR (Status)) {
-      DEBUG ((
-        DEBUG_WARN,
-        "OC: %a patcher result %u for %a (%a) - %r\n",
-        PRINT_KERNEL_CACHE_TYPE (CacheType),
-        Index,
-        Target,
-        Comment,
-        Status
-        ));
-    } else {
-      CHAR8  OriginalBytesStr[MAX_PATCH_DEBUG_BYTES * 3 + 1];
-      CHAR8  PatchedBytesStr[MAX_PATCH_DEBUG_BYTES * 3 + 1];
-
-      // Only print detailed info for kernel patches where info was captured
-      if (IsKernelPatch && mPatcherDebugInfo.Valid) {
-        SPrintByteSlice (OriginalBytesStr, sizeof(OriginalBytesStr), mPatcherDebugInfo.LastOriginalBytes, mPatcherDebugInfo.LastAppliedSize);
-        SPrintByteSlice (PatchedBytesStr, sizeof(PatchedBytesStr), mPatcherDebugInfo.LastPatchedBytes, mPatcherDebugInfo.LastAppliedSize);
-
-        DEBUG ((
-          DEBUG_INFO,
-          "OC: %a patcher result %u for %a (%a) - %r. Offset 0x%Lx, Original: %a, Patched: %a\n",
-          PRINT_KERNEL_CACHE_TYPE (CacheType),
-          Index,
-          Target,
-          Comment,
-          Status,
-          (UINT64)mPatcherDebugInfo.LastAppliedOffset,
-          OriginalBytesStr,
-          PatchedBytesStr
-          ));
-      } else {
-        DEBUG ((
-          DEBUG_INFO,
-          "OC: %a patcher result %u for %a (%a) - %r\n",
-          PRINT_KERNEL_CACHE_TYPE (CacheType),
-          Index,
-          Target,
-          Comment,
-          Status
-          ));
-      }
-    }
+    DEBUG ((
+      EFI_ERROR (Status) ? DEBUG_WARN : DEBUG_INFO,
+      "OC: %a patcher result %u for %a (%a) - %r\n",
+      PRINT_KERNEL_CACHE_TYPE (CacheType),
+      Index,
+      Target,
+      Comment,
+      Status
+      ));
   }
 }
 

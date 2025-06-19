@@ -27,96 +27,6 @@
 #include "MkextInternal.h"
 #include "PrelinkedInternal.h"
 
-#define MAX_PATCH_DEBUG_BYTES 32
-
-typedef struct {
-  UINTN   LastAppliedOffset;
-  UINT32  LastAppliedSize;
-  UINT8   LastOriginalBytes[MAX_PATCH_DEBUG_BYTES];
-  UINT8   LastPatchedBytes[MAX_PATCH_DEBUG_BYTES];
-  BOOLEAN Valid;
-} PATCHER_DEBUG_INFO;
-
-STATIC PATCHER_DEBUG_INFO mPatcherDebugInfo;
-
-extern UINT32
-ApplyPatch (
-  IN     CONST UINT8  *Find,
-  IN     CONST UINT8  *Mask,  OPTIONAL
-  IN     UINT32       FindSize,
-  IN     CONST UINT8  *Replace,
-  IN     CONST UINT8  *ReplaceMask, OPTIONAL
-  IN OUT UINT8        *Buffer,
-  IN     UINT32       BufferSize,
-  IN     UINT32       Count,
-  IN     UINT32       Skip
-  );
-
-STATIC
-UINT32
-InternalApplyPatchAndGetInfo (
-  IN     CONST UINT8          *Find,
-  IN     CONST UINT8          *Mask,  OPTIONAL
-  IN     UINT32               FindSize,
-  IN     CONST UINT8          *Replace,
-  IN     CONST UINT8          *ReplaceMask, OPTIONAL
-  IN OUT UINT8                *Buffer,
-  IN     UINT32               BufferSize,
-  IN     UINT32               Count,
-  IN     UINT32               Skip,
-  IN OUT PATCHER_DEBUG_INFO   *DebugInfo
-  )
-{
-  UINTN   SearchOffset;
-  UINTN   MatchCount;
-  UINT32  i;
-  UINT32  ReplacementsMade = 0;
-  UINT32  SkippedCount = 0;
-  DebugInfo->Valid = FALSE; // Invalidate info until a successful patch
-  for (SearchOffset = 0; SearchOffset <= BufferSize - FindSize; ++SearchOffset) {
-    MatchCount = 0;
-    for (i = 0; i < FindSize; ++i) {
-      if (Mask != NULL) {
-        if (((Buffer[SearchOffset + i] ^ Find[i]) & Mask[i]) == 0) {
-          MatchCount++;
-        } else {
-          break;
-        }
-      } else {
-        if (Buffer[SearchOffset + i] == Find[i]) {
-          MatchCount++;
-        } else {
-          break;
-        }
-      }
-    }
-    if (MatchCount == FindSize) {
-      if (SkippedCount < Skip) {
-        SkippedCount++;
-        continue;
-      }
-      DebugInfo->LastAppliedOffset = SearchOffset;
-      DebugInfo->LastAppliedSize   = FindSize;
-      CopyMem (DebugInfo->LastOriginalBytes, Buffer + SearchOffset, MIN (FindSize, MAX_PATCH_DEBUG_BYTES));
-      PatcherSafeReplace (
-        Buffer + SearchOffset,
-        Find,
-        Replace,
-        Mask,
-        ReplaceMask,
-        FindSize
-        );
-      CopyMem (DebugInfo->LastPatchedBytes, Buffer + SearchOffset, MIN (FindSize, MAX_PATCH_DEBUG_BYTES));
-      DebugInfo->Valid = TRUE;
-      ReplacementsMade++;
-      if (Count > 0 && ReplacementsMade >= Count) {
-        break;
-      }
-    }
-  }
-  return ReplacementsMade;
-}
-
 STATIC
 BOOLEAN
 GetTextBaseOffset (
@@ -297,10 +207,6 @@ PatcherInitContextFromBuffer (
     Context->FileOffset
     ));
 
-  // Initialize the global debug info structure when context is initialized
-  ZeroMem(&mPatcherDebugInfo, sizeof(mPatcherDebugInfo));
-  mPatcherDebugInfo.Valid = FALSE;
-
   return EFI_SUCCESS;
 }
 
@@ -411,9 +317,6 @@ PatcherApplyGenericPatch (
   UINT32      Size;
   UINT32      ReplaceCount;
 
-  ZeroMem(&mPatcherDebugInfo, sizeof(mPatcherDebugInfo));
-  mPatcherDebugInfo.Valid = FALSE;
-
   Base = (UINT8 *)MachoGetMachHeader (&Context->MachContext);
   Size = MachoGetInnerSize (&Context->MachContext);
   if (Patch->Base != NULL) {
@@ -447,20 +350,11 @@ PatcherApplyGenericPatch (
     return EFI_SUCCESS;
   }
 
-  	
-  // Capture debug info for direct copy
-  mPatcherDebugInfo.LastAppliedOffset = (UINTN)(Base - (UINT8 *)MachoGetMachHeader (&Context->MachContext));
-  mPatcherDebugInfo.LastAppliedSize   = Patch->Size;
-  ZeroMem(mPatcherDebugInfo.LastOriginalBytes, sizeof(mPatcherDebugInfo.LastOriginalBytes));
-  CopyMem(mPatcherDebugInfo.LastPatchedBytes, Base, MIN(Patch->Size, MAX_PATCH_DEBUG_BYTES));
-  mPatcherDebugInfo.Valid = TRUE;
-
   if ((Patch->Limit > 0) && (Patch->Limit < Size)) {
     Size = Patch->Limit;
   }
 
-  // Use our new wrapper function
-  ReplaceCount = InternalApplyPatchAndGetInfo (
+  ReplaceCount = ApplyPatch (
                    Patch->Find,
                    Patch->Mask,
                    Patch->Size,
@@ -469,8 +363,7 @@ PatcherApplyGenericPatch (
                    Base,
                    Size,
                    Patch->Count,
-                   Patch->Skip,
-                   &mPatcherDebugInfo
+                   Patch->Skip
                    );
 
   DEBUG ((
