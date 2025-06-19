@@ -53,7 +53,7 @@ InternalConstructHexBytesString (
   if ((CurrentOffset > 0) && (OutputBuffer[CurrentOffset - 1] == ' ')) {
     CurrentOffset--;
   }
-  
+
   OutputBuffer[CurrentOffset] = '\0';
 }
 
