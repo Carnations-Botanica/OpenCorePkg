@@ -47,24 +47,11 @@ ApplyPatch (
   IN     CONST UINT8  *Replace,
   IN     CONST UINT8  *ReplaceMask, OPTIONAL
   IN OUT UINT8        *Buffer,
-  IN     UINT33       BufferSize,
+  IN     UINT32       BufferSize,
   IN     UINT32       Count,
   IN     UINT32       Skip
   );
-/**
-  Wrapper for ApplyPatch to capture debug information.
-  @param[in]     Find        Pattern to find.
-  @param[in]     Mask        Bitmask for pattern.
-  @param[in]     FindSize    Size of pattern.
-  @param[in]     Replace     Pattern to replace with.
-  @param[in]     ReplaceMask Bitmask for replace pattern.
-  @param[in,out] Buffer      Buffer to patch.
-  @param[in]     BufferSize  Size of buffer to patch.
-  @param[in]     Count       Number of occurrences to replace.
-  @param[in]     Skip        Number of occurrences to skip.
-  @param[in,out] DebugInfo   Pointer to structure to store debug info.
-  @return The number of replacements made.
-**/
+
 STATIC
 UINT32
 InternalApplyPatchAndGetInfo (
@@ -74,9 +61,9 @@ InternalApplyPatchAndGetInfo (
   IN     CONST UINT8          *Replace,
   IN     CONST UINT8          *ReplaceMask, OPTIONAL
   IN OUT UINT8                *Buffer,
-  IN     UINT33               BufferSize,
-  IN     UINT33               Count,
-  IN     UINT33               Skip,
+  IN     UINT32               BufferSize,
+  IN     UINT32               Count,
+  IN     UINT32               Skip,
   IN OUT PATCHER_DEBUG_INFO   *DebugInfo
   )
 {
