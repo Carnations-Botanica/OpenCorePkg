@@ -36,11 +36,11 @@ InternalConstructHexBytesString (
   IN UINTN       OutputBufferSize
   )
 {
-  CONST UINT8 *Bytes;
-  UINTN       Index;
-  UINTN       CurrentOffset;
+  CONST UINT8  *Bytes;
+  UINTN        Index;
+  UINTN        CurrentOffset;
 
-  Bytes = (CONST UINT8 *) Buffer;
+  Bytes         = (CONST UINT8 *)Buffer;
   CurrentOffset = 0;
 
   for (Index = 0; Index < BufferSize && CurrentOffset + 3 <= OutputBufferSize; ++Index) {
@@ -50,7 +50,7 @@ InternalConstructHexBytesString (
   }
 
   // Remove the last trailing space if it exists, and null-terminate the string.
-  if (CurrentOffset > 0 && OutputBuffer[CurrentOffset - 1] == ' ') {
+  if ((CurrentOffset > 0) && (OutputBuffer[CurrentOffset - 1] == ' ')) {
     CurrentOffset--;
   }
   OutputBuffer[CurrentOffset] = '\0';
@@ -233,7 +233,7 @@ ApplyPatch (
       OriginalLocationData,
       MIN (PatternSize, MAX_PRINTABLE_PATCH_SIZE),
       FormattedOriginalBytes,
-      sizeof(FormattedOriginalBytes)
+      sizeof (FormattedOriginalBytes)
       );
     DEBUG ((DEBUG_INFO, "  Original: %a\n", FormattedOriginalBytes));
 
@@ -241,7 +241,7 @@ ApplyPatch (
       &Data[DataOff],
       MIN (PatternSize, MAX_PRINTABLE_PATCH_SIZE),
       FormattedPatchedBytes,
-      sizeof(FormattedPatchedBytes)
+      sizeof (FormattedPatchedBytes)
       );
     DEBUG ((DEBUG_INFO, "  Patched:  %a\n", FormattedPatchedBytes));
 
