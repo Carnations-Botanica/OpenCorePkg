@@ -47,6 +47,21 @@ FindPattern (
   );
 
 UINT32
+ApplyPatchEx (
+  IN CONST UINT8   *Pattern,
+  IN CONST UINT8   *PatternMask OPTIONAL,
+  IN CONST UINT32  PatternSize,
+  IN CONST UINT8   *Replace,
+  IN CONST UINT8   *ReplaceMask OPTIONAL,
+  IN UINT8         *Data,
+  IN UINT32        DataSize,
+  IN UINT32        Count,
+  IN UINT32        Skip,
+  OUT UINT32       *FoundOffsets,   OPTIONAL
+  IN  UINT32       MaxOffsets
+  );
+
+UINT32
 ApplyPatch (
   IN CONST UINT8   *Pattern,
   IN CONST UINT8   *PatternMask OPTIONAL,

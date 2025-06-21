@@ -142,7 +142,7 @@ FindPattern (
 }
 
 UINT32
-ApplyPatch (
+ApplyPatchEx (
   IN CONST UINT8   *Pattern,
   IN CONST UINT8   *PatternMask OPTIONAL,
   IN CONST UINT32  PatternSize,
@@ -151,14 +151,16 @@ ApplyPatch (
   IN UINT8         *Data,
   IN UINT32        DataSize,
   IN UINT32        Count,
-  IN UINT32        Skip
+  IN UINT32        Skip,
+  OUT UINT32       *FoundOffsets,   OPTIONAL
+  IN  UINT32       MaxOffsets
   )
 {
   UINT32   ReplaceCount;
   UINT32   DataOff;
   BOOLEAN  Found;
   UINT8    OriginalLocationData[MAX_PRINTABLE_PATCH_SIZE];
-  CHAR8    FormattedOriginalBytes[MAX_PRINTABLE_PATCH_SIZE * 3 + 1]; // 2 chars + 1 space per byte + null terminator
+  CHAR8    FormattedOriginalBytes[MAX_PRINTABLE_PATCH_SIZE * 3 + 1];
   CHAR8    FormattedPatchedBytes[MAX_PRINTABLE_PATCH_SIZE * 3 + 1];
 
   if (DataSize < PatternSize) {
@@ -201,12 +203,14 @@ ApplyPatch (
       DataOff += PatternSize;
       continue;
     }
+    
+    // Store the relative offset if the output buffer is provided.
+    if (FoundOffsets != NULL && ReplaceCount < MaxOffsets) {
+      FoundOffsets[ReplaceCount] = DataOff;
+    }
 
-    //
-    // Store original bytes from the current location before modification.
-    //
     CopyMem (OriginalLocationData, &Data[DataOff], MIN (PatternSize, MAX_PRINTABLE_PATCH_SIZE));
-    DEBUG ((DEBUG_INFO, "OCAK: DataPatcher has been called:\n"));
+    DEBUG ((DEBUG_INFO, "OCAK: ApplyPatchEx has been called:\n"));
 
     //
     // Perform replacement.
@@ -218,17 +222,6 @@ ApplyPatch (
         Data[DataOff + Index] = (Data[DataOff + Index] & ~ReplaceMask[Index]) | (Replace[Index] & ReplaceMask[Index]);
       }
     }
-
-    //
-    // Log detailed information about the applied patch in the desired format.
-    // The InternalConstructHexBytesString function prepares the string,
-    // and then a single DEBUG call prints the line without intermediate timestamps.
-    //
-    DEBUG ((
-      DEBUG_INFO,
-      "  Offset: 0x%08X\n",
-      DataOff
-      ));
 
     InternalConstructHexBytesString (
       OriginalLocationData,
@@ -261,4 +254,31 @@ ApplyPatch (
   }
 
   return ReplaceCount;
+}
+
+UINT32
+ApplyPatch (
+  IN CONST UINT8   *Pattern,
+  IN CONST UINT8   *PatternMask OPTIONAL,
+  IN CONST UINT32  PatternSize,
+  IN CONST UINT8   *Replace,
+  IN CONST UINT8   *ReplaceMask OPTIONAL,
+  IN UINT8         *Data,
+  IN UINT32        DataSize,
+  IN UINT32        Count,
+  IN UINT32        Skip
+  )
+{
+  return ApplyPatchEx (
+    Pattern,
+    PatternMask,
+    PatternSize,
+    Replace,
+    ReplaceMask,
+    Data,
+    DataSize,
+    Count,
+    Skip,
+    NULL, 0
+    );
 }

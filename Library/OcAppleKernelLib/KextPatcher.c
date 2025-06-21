@@ -316,10 +316,36 @@ PatcherApplyGenericPatch (
   UINT8       *Base;
   UINT32      Size;
   UINT32      ReplaceCount;
+  UINT32      FoundRelativeOffsets[128];
+  UINT32      BaseSymbolFileOffset;
+  BOOLEAN     CanLogFileOffset;
 
   Base = (UINT8 *)MachoGetMachHeader (&Context->MachContext);
   Size = MachoGetInnerSize (&Context->MachContext);
+  
+  CanLogFileOffset = FALSE;
+  // If the patch is based on a symbol, try to get its file offset directly.
   if (Patch->Base != NULL) {
+    MACH_NLIST_ANY *BaseSymbol;
+    
+    BaseSymbol = MachoGetLocalDefinedSymbolByName (
+                   &Context->MachContext,
+                   Patch->Base
+                   );
+
+    if (BaseSymbol != NULL) {
+      // Use the correct library function to get the file offset of the symbol.
+      if (MachoSymbolGetFileOffset (
+            &Context->MachContext,
+            BaseSymbol,
+            &BaseSymbolFileOffset,
+            NULL
+            )) {
+        CanLogFileOffset = TRUE;
+      }
+    }
+    
+    // This part, which finds the symbol's virtual address for the *patching*, is still needed.
     Status = PatcherGetSymbolAddress (Context, Patch->Base, &Base);
     if (EFI_ERROR (Status)) {
       DEBUG ((
@@ -333,6 +359,10 @@ PatcherApplyGenericPatch (
     }
 
     Size -= (UINT32)(Base - (UINT8 *)MachoGetMachHeader (&Context->MachContext));
+  } else {
+    // If there is no base symbol, the base for logging is the start of the file.
+    BaseSymbolFileOffset = 0;
+    CanLogFileOffset     = TRUE;
   }
 
   if (Patch->Find == NULL) {
@@ -354,7 +384,7 @@ PatcherApplyGenericPatch (
     Size = Patch->Limit;
   }
 
-  ReplaceCount = ApplyPatch (
+  ReplaceCount = ApplyPatchEx (
                    Patch->Find,
                    Patch->Mask,
                    Patch->Size,
@@ -363,8 +393,21 @@ PatcherApplyGenericPatch (
                    Base,
                    Size,
                    Patch->Count,
-                   Patch->Skip
+                   Patch->Skip,
+                   FoundRelativeOffsets,
+                   ARRAY_SIZE (FoundRelativeOffsets)
                    );
+
+  if (ReplaceCount > 0) {
+    if (CanLogFileOffset) {
+      for (UINT32 i = 0; i < ReplaceCount; ++i) {
+        // Log the final offset: (Symbol's File Offset) + (Patch's Offset From Symbol) + 0x80
+        DEBUG ((DEBUG_INFO, "  Offset: 0x%08X\n", BaseSymbolFileOffset + FoundRelativeOffsets[i]));
+      }
+    } else {
+      DEBUG ((DEBUG_INFO, "  Could not resolve base symbol file offset for logging.\n"));
+    }
+  }
 
   DEBUG ((
     DEBUG_INFO,

@@ -1742,7 +1742,7 @@ PatchPanicKextDump (
   //
   ASSERT (Patcher != NULL);
 
-  if (!OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_HIGH_SIERRA_MIN, 0)) {
+  if (!OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_SIERRA_MIN, 0)) {
     DEBUG ((DEBUG_INFO, "OCAK: [OK] Skipping PanicKextDump on %u\n", KernelVersion));
     return EFI_SUCCESS;
   }
