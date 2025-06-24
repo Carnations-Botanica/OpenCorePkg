@@ -28,6 +28,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
+#include <Protocol/SimpleFileSystem.h>
 
 STATIC OC_STORAGE_CONTEXT  *mOcStorage;
 STATIC OC_GLOBAL_CONFIG    *mOcConfiguration;
@@ -42,6 +43,70 @@ STATIC BOOLEAN            mOcCachelessInProgress;
 
 STATIC EFI_FILE_PROTOCOL  *mCustomKernelDirectory;
 STATIC BOOLEAN            mCustomKernelDirectoryInProgress;
+
+STATIC
+VOID
+DumpKernelToFile (
+  IN VOID    *KernelBuffer,
+  IN UINT32  KernelSize
+  )
+{
+  EFI_STATUS         Status;
+  EFI_FILE_PROTOCOL  *Root;
+  EFI_FILE_PROTOCOL  *FileHandle;
+  CHAR16             FileName[] = L"PatchedKernel.bin";
+  UINTN              BufferSize;
+
+  DEBUG ((DEBUG_INFO, "OC: Dumping patched kernel of size %u bytes...\n", KernelSize));
+
+  Status = OcFindWritableOcFileSystem (&Root);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Could not find writable filesystem to dump kernel - %r\n", Status));
+    return;
+  }
+
+  Status = Root->Open (
+                   Root,
+                   &FileHandle,
+                   FileName,
+                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                   0
+                   );
+
+  if (!EFI_ERROR (Status)) {
+    //
+    // File exists, so delete it. We can ignore the status of the deletion.
+    //
+    FileHandle->Delete (FileHandle);
+    DEBUG ((DEBUG_INFO, "OC: Deleting existing dumped Kernel Bin...\n"));
+  }
+
+  Status = Root->Open (
+                   Root,
+                   &FileHandle,
+                   FileName,
+                   EFI_FILE_MODE_CREATE | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_READ,
+                   0
+                   );
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Failed to create PatchedKernel.bin - %r\n", Status));
+    Root->Close (Root);
+    return;
+  }
+
+  BufferSize = KernelSize;
+  Status     = FileHandle->Write (FileHandle, &BufferSize, KernelBuffer);
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Failed to write to PatchedKernel.bin - %r\n", Status));
+  } else {
+    DEBUG ((DEBUG_INFO, "OC: Successfully dumped %u bytes to PatchedKernel.bin\n", (UINT32)BufferSize));
+  }
+
+  FileHandle->Close (FileHandle);
+  Root->Close (Root);
+}
 
 STATIC
 VOID
@@ -1333,6 +1398,10 @@ OcKernelFileOpen (
 
       DEBUG ((DEBUG_INFO, "OC: Prelinked status - %r\n", PrelinkedStatus));
 
+      if (!EFI_ERROR (PrelinkedStatus)) {
+        DumpKernelToFile (Kernel, KernelSize);
+      }
+
       Status = OcGetFileModificationTime (*NewHandle, &ModificationTime);
       if (EFI_ERROR (Status)) {
         ZeroMem (&ModificationTime, sizeof (ModificationTime));
@@ -1421,6 +1490,11 @@ OcKernelFileOpen (
                  AllocatedSize
                  );
       DEBUG ((DEBUG_INFO, "OC: Mkext status - %r\n", Status));
+
+      if (!EFI_ERROR (Status)) {
+        DumpKernelToFile (Kernel, KernelSize);
+      }
+
       if (!EFI_ERROR (Status)) {
         Status = OcGetFileModificationTime (*NewHandle, &ModificationTime);
         if (EFI_ERROR (Status)) {
