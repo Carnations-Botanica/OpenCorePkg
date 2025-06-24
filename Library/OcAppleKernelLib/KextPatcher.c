@@ -322,12 +322,12 @@ PatcherApplyGenericPatch (
 
   Base = (UINT8 *)MachoGetMachHeader (&Context->MachContext);
   Size = MachoGetInnerSize (&Context->MachContext);
-  
+
   CanLogFileOffset = FALSE;
   // If the patch is based on a symbol, try to get its file offset directly.
   if (Patch->Base != NULL) {
-    MACH_NLIST_ANY *BaseSymbol;
-    
+    MACH_NLIST_ANY  *BaseSymbol;
+
     BaseSymbol = MachoGetLocalDefinedSymbolByName (
                    &Context->MachContext,
                    Patch->Base
@@ -340,11 +340,12 @@ PatcherApplyGenericPatch (
             BaseSymbol,
             &BaseSymbolFileOffset,
             NULL
-            )) {
+            ))
+      {
         CanLogFileOffset = TRUE;
       }
     }
-    
+
     // This part, which finds the symbol's virtual address for the *patching*, is still needed.
     Status = PatcherGetSymbolAddress (Context, Patch->Base, &Base);
     if (EFI_ERROR (Status)) {
