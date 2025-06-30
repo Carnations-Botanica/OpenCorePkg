@@ -1742,7 +1742,8 @@ PatchPanicKextDump (
   //
   ASSERT (Patcher != NULL);
 
-  if (!OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_SIERRA_MIN, 0)) {
+  // Attempt to patch on Tiger+ for AMD CPUs
+  if (!OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_TIGER_MIN, 0)) {
     DEBUG ((DEBUG_INFO, "OCAK: [OK] Skipping PanicKextDump on %u\n", KernelVersion));
     return EFI_SUCCESS;
   }

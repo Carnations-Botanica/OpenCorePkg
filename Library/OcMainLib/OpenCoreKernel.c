@@ -30,6 +30,18 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/SimpleFileSystem.h>
 
+typedef enum {
+  DUMP_TYPE_PREPATCHED,
+  DUMP_TYPE_PREPROCESSED,
+  DUMP_TYPE_PATCHED
+} DUMP_TYPE;
+
+typedef enum {
+  KERNEL_TYPE_PLAIN,
+  KERNEL_TYPE_PRELINKED,
+  KERNEL_TYPE_MKEXT
+} KERNEL_TYPE;
+
 STATIC OC_STORAGE_CONTEXT  *mOcStorage;
 STATIC OC_GLOBAL_CONFIG    *mOcConfiguration;
 STATIC OC_CPU_INFO         *mOcCpuInfo;
@@ -44,41 +56,478 @@ STATIC BOOLEAN            mOcCachelessInProgress;
 STATIC EFI_FILE_PROTOCOL  *mCustomKernelDirectory;
 STATIC BOOLEAN            mCustomKernelDirectoryInProgress;
 
+//
+// Helper to find all occurrences of Substring in String.
+//
+STATIC
+CONST VOID *
+OcAsciiSearch (
+  IN CONST VOID  *String,
+  IN UINTN       StringSize,
+  IN CONST VOID  *Substring,
+  IN UINTN       SubstringSize
+  )
+{
+  CONST UINT8  *Str;
+  CONST UINT8  *Sub;
+  UINTN        Index;
+
+  if ((SubstringSize == 0) || (StringSize < SubstringSize)) {
+    return NULL;
+  }
+
+  Str = String;
+  Sub = Substring;
+
+  for (Index = 0; Index <= StringSize - SubstringSize; Index++) {
+    if (CompareMem (&Str[Index], Sub, SubstringSize) == 0) {
+      return &Str[Index];
+    }
+  }
+
+  return NULL;
+}
+
+//
+// Helper to convert a hexadecimal character string to a byte array.
+//
+STATIC
+EFI_STATUS
+OcHexStringToBytes (
+  IN  CONST CHAR8  *HexString,
+  OUT UINT8        **Bytes,
+  OUT UINTN        *BytesSize
+  )
+{
+  UINTN       HexStringLen;
+  UINTN       Index;
+  UINT8       Digit;
+  UINT8       ByteValue;
+
+  HexStringLen = AsciiStrLen (HexString);
+  if ((HexStringLen % 2) != 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *BytesSize = HexStringLen / 2;
+  *Bytes     = AllocatePool (*BytesSize);
+  if (*Bytes == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  for (Index = 0; Index < *BytesSize; ++Index) {
+    // High nibble
+    Digit = HexString[Index * 2];
+    if (Digit >= '0' && Digit <= '9') {
+      ByteValue = (Digit - '0') << 4;
+    } else if (Digit >= 'a' && Digit <= 'f') {
+      ByteValue = (Digit - 'a' + 10) << 4;
+    } else if (Digit >= 'A' && Digit <= 'F') {
+      ByteValue = (Digit - 'A' + 10) << 4;
+    } else {
+      FreePool (*Bytes);
+      return EFI_INVALID_PARAMETER;
+    }
+
+    // Low nibble
+    Digit = HexString[Index * 2 + 1];
+    if (Digit >= '0' && Digit <= '9') {
+      ByteValue |= (Digit - '0');
+    } else if (Digit >= 'a' && Digit <= 'f') {
+      ByteValue |= (Digit - 'a' + 10);
+    } else if (Digit >= 'A' && Digit <= 'F') {
+      ByteValue |= (Digit - 'A' + 10);
+    } else {
+      FreePool (*Bytes);
+      return EFI_INVALID_PARAMETER;
+    }
+
+    (*Bytes)[Index] = ByteValue;
+  }
+
+  return EFI_SUCCESS;
+}
+
+STATIC
+UINTN
+OcKernelScanForHexSignature (
+  IN CONST UINT8  *Buffer,
+  IN UINT32       BufferSize,
+  IN CONST CHAR8  *HexSignature,
+  IN CONST CHAR8  *Comment
+  )
+{
+  UINTN        Finds;
+  CONST UINT8  *LastFound;
+  UINTN        SearchOffset;
+  UINT8        *SignatureBytes;
+  UINTN        SignatureSize;
+  EFI_STATUS   Status;
+
+  if (HexSignature == NULL) {
+    return 0;
+  }
+
+  Finds  = 0;
+  Status = OcHexStringToBytes (HexSignature, &SignatureBytes, &SignatureSize);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Invalid hex string for signature %a\n", Comment));
+    return 0;
+  }
+
+  SearchOffset = 0;
+  while (SearchOffset < BufferSize) {
+    LastFound = OcAsciiSearch (Buffer + SearchOffset, BufferSize - SearchOffset, SignatureBytes, SignatureSize);
+    if (LastFound != NULL) {
+      DEBUG ((
+        DEBUG_INFO,
+        "OC: Found %a at kernel offset 0x%08X\n",
+        Comment,
+        (UINT32)(LastFound - Buffer)
+        ));
+      SearchOffset = (LastFound - Buffer) + SignatureSize;
+      Finds++;
+    } else {
+      break;
+    }
+  }
+
+  FreePool (SignatureBytes);
+
+  return Finds;
+}
+
 STATIC
 VOID
-DumpKernelToFile (
-  IN VOID    *KernelBuffer,
-  IN UINT32  KernelSize
+OcTestKernelPatch (
+  IN CONST UINT8  *Kernel,
+  IN UINT32       KernelSize,
+  IN CONST CHAR8  *OriginalHex,
+  IN CONST CHAR8  *PatchedHex,
+  IN CONST CHAR8  *Comment,
+  IN CONST CHAR8  *HexOffset     OPTIONAL
+  )
+{
+  UINTN        OriginalFinds;
+  UINTN        PatchedFinds;
+  UINT8        *OriginalBytes;
+  UINTN        OriginalSize;
+  UINT8        *PatchedBytes;
+  UINTN        PatchedSize;
+  EFI_STATUS   Status;
+  UINTN        TargetOffset;
+  CHAR8        FormattedComment[128];
+
+  // If no original signature is provided, there is nothing to test.
+  if (OriginalHex == NULL) {
+    DEBUG ((DEBUG_INFO, "OC: No signature provided for %a, skipping check\n", Comment));
+    return;
+  }
+
+  // If a specific offset is provided, check only there.
+  if (HexOffset != NULL) {
+    Status = AsciiStrHexToUintnS (HexOffset, NULL, &TargetOffset);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_WARN, "OC: Invalid HexOffset %a for patch %a\n", HexOffset, Comment));
+      return;
+    }
+
+    // Get original bytes
+    Status = OcHexStringToBytes (OriginalHex, &OriginalBytes, &OriginalSize);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_WARN, "OC: Invalid OriginalHex for patch %a\n", Comment));
+      return;
+    }
+
+    // Check bounds
+    if (TargetOffset + OriginalSize > KernelSize) {
+      DEBUG ((DEBUG_INFO, "OC: Signature for %a not found at specified offset 0x%08X (out of bounds)\n", Comment, (UINT32)TargetOffset));
+      FreePool (OriginalBytes);
+      return;
+    }
+
+    // Check for original signature
+    if (CompareMem (Kernel + TargetOffset, OriginalBytes, OriginalSize) == 0) {
+      DEBUG ((DEBUG_INFO, "OC: Found %a (Original) at specified offset 0x%08X\n", Comment, (UINT32)TargetOffset));
+      FreePool (OriginalBytes);
+      return;
+    }
+
+    // At this point, we know it's not the original signature.
+    // Case 1: Check for ANY modification (PatchedHex is NULL)
+    if (PatchedHex == NULL) {
+      DEBUG ((DEBUG_INFO, "OC: Found %a (Modified) at specified offset 0x%08X\n", Comment, (UINT32)TargetOffset));
+      FreePool (OriginalBytes);
+      return;
+    }
+
+    // Case 2: Check for a SPECIFIC patch (PatchedHex is not NULL)
+    Status = OcHexStringToBytes (PatchedHex, &PatchedBytes, &PatchedSize);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_WARN, "OC: Invalid PatchedHex for patch %a\n", Comment));
+      FreePool (OriginalBytes);
+      return;
+    }
+
+    if ((TargetOffset + PatchedSize <= KernelSize) && (CompareMem (Kernel + TargetOffset, PatchedBytes, PatchedSize) == 0)) {
+      DEBUG ((DEBUG_INFO, "OC: Found %a (Patched) at specified offset 0x%08X\n", Comment, (UINT32)TargetOffset));
+    } else {
+      DEBUG ((DEBUG_INFO, "OC: Signature for %a not found at specified offset 0x%08X\n", Comment, (UINT32)TargetOffset));
+    }
+
+    FreePool (PatchedBytes);
+    FreePool (OriginalBytes);
+    return;
+  } else {
+    // Global search logic
+    AsciiSPrint (FormattedComment, sizeof (FormattedComment), "%a (Original)", Comment);
+    OriginalFinds = OcKernelScanForHexSignature (Kernel, KernelSize, OriginalHex, FormattedComment);
+
+    if (PatchedHex != NULL) {
+      AsciiSPrint (FormattedComment, sizeof (FormattedComment), "%a (Patched)", Comment);
+      PatchedFinds = OcKernelScanForHexSignature (Kernel, KernelSize, PatchedHex, FormattedComment);
+    } else {
+      PatchedFinds = 0;
+    }
+
+    if (OriginalFinds == 0 && PatchedFinds == 0) {
+      DEBUG ((DEBUG_INFO, "OC: Signature for %a not found anywhere\n", Comment));
+    }
+  }
+}
+
+STATIC
+VOID
+OcTestAMDSignatures (
+  IN CONST UINT8  *Kernel,
+  IN UINT32       KernelSize
+  )
+{
+  // Get the major Darwin version (e.g., 17 for 10.13.x, 16 for 10.12.x, and so on)
+  UINT32 MajorDarwinVersion = mOcDarwinVersion / 10000;
+
+  DEBUG ((DEBUG_INFO, "OC: Running common Kernel Patch signature tests...\n"));
+
+  // Check if the current OS is High Sierra (Darwin 17)
+  if (MajorDarwinVersion == 17) {
+    OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
+                                           "00002E2A7300", "PanicKextDump", "0x007ED68C");
+    OcTestKernelPatch (Kernel, KernelSize, "B901000100",
+                                           NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x00174640");
+    OcTestKernelPatch (Kernel, KernelSize, "C1E81AFFC089",
+                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x00174CA5");
+    OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                           "66906690669090", "_commpage_populate | Remove rdmsr", "0x0018AA3F");
+    OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F14489",
+                                           "B81D0000804489F14489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x00174C63");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                           "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001737D0");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x0017381B");
+    OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                           "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x00173897");
+    OcTestKernelPatch (Kernel, KernelSize, "003A0F82",
+                                           "00000F82", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x001742DF");
+    OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                           "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x0076E431");
+    OcTestKernelPatch (Kernel, KernelSize, "31DB803DB80B8D0006755C",
+                                           "BBBC4FEA78E95D00000090", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x0017448B");
+    OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
+                                           "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x0018DC1D");
+    OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF81CA00000100B977020000",
+                                           "B977020000B806010700BA060107000F1F4000", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x00194459");
+  
+  // Check if the current OS is Sierra (Darwin 16)
+  } else if (MajorDarwinVersion == 16) {
+    OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
+                                           "00002E2A7300", "PanicKextDump", "0x007EEEB0");
+    OcTestKernelPatch (Kernel, KernelSize, "B901000100",
+                                           NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x003F64F6");
+    OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC289",
+                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x001ED1FE");
+    OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                           "66906690669090", "_commpage_populate | Remove rdmsr", "0x0020194B");
+    OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F94489",
+                                           "B81D0000804489F94489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x001ED1B3");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                           "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001EC21E");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x001EC269");
+    OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                           "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x001EC2E4");
+    OcTestKernelPatch (Kernel, KernelSize, "0FB60552A3700083F83A0F82B1000000",
+                                           "0FB60552A3700083F8000F82B1000000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x001ECD2C");
+    OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                           "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x0077E06B");
+    OcTestKernelPatch (Kernel, KernelSize, "31DB0FB6C883F906755A",
+                                           "BBBC4FEA78E95A000000", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x001ECEE2");
+    OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
+                                           "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x00204CBD");
+    OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
+                                           "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x0020BA99");
+  } else if (MajorDarwinVersion == 15) {
+    OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
+                                           NULL, "PanicKextDump", "0x007F15EE");
+    OcTestKernelPatch (Kernel, KernelSize, "B901000100",
+                                           NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x003CA970");
+    OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC289",
+                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x001BC58E");
+    OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                           "66906690669090", "_commpage_populate | Remove rdmsr", "0x001D1B56");
+    OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F94489",
+                                           "B81D0000804489F94489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x001BC543");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                           "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001BB51E");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x001BB569");
+    OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                           "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x001BB5E4");
+    OcTestKernelPatch (Kernel, KernelSize, "0FB60519A0700083F83A0F82B1000000",
+                                           "0FB60519A0700083F8000F82B1000000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x001BC02D");
+    OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                           "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x007726A9");
+    OcTestKernelPatch (Kernel, KernelSize, "31DB0FB6C883F9060F85D1000000",
+                                           "BBBC4FEA78E9D50000000F1F4000", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x001BC1F2");
+    OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
+                                           "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x001D4FEB");
+    OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
+                                           "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x001DC3D8");
+  } else if (MajorDarwinVersion == 14) {
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "PanicKextDump", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_commpage_populate | Remove rdmsr", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_generic_info | Remove wrmsr(0x8B)", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_generic_info | Replace rdmsr(0x8B)", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_generic_info | Set flag=1", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_generic_info | Disable Check for Leaf 7", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "Strings Replace | GenuineIntel/AuthenticAMD Vendor", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_lapic_init | Remove version check", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, NULL,
+                                           NULL, "_mtrr_update_action | Set PAT MSR to 00070106h", NULL);
+  } else {
+  // For any other detected unsupported version
+    DEBUG ((
+      DEBUG_INFO,
+      "OC: Skipping common patch signature tests for unsupported/unknown Darwin version %u.\n",
+      mOcDarwinVersion
+      ));
+  }
+}
+
+STATIC
+VOID
+OcKernelDumpBuffer (
+  IN VOID         *Buffer,
+  IN UINT32       BufferSize,
+  IN DUMP_TYPE    DumpType,
+  IN KERNEL_TYPE  KernelType,
+  IN UINT32       DarwinVersion
   )
 {
   EFI_STATUS         Status;
   EFI_FILE_PROTOCOL  *Root;
   EFI_FILE_PROTOCOL  *FileHandle;
-  CHAR16             FileName[] = L"PatchedKernel.bin";
-  UINTN              BufferSize;
+  CHAR16             FileName[128];
+  UINTN              WriteSize;
+  EFI_TIME           BootTime;
+  UINT32             MajorXnu;
+  UINT32             MinorXnu;
+  UINT32             PatchXnu;
+  CONST CHAR16       *Prefix;
 
-  DEBUG ((DEBUG_INFO, "OC: Dumping patched kernel of size %u bytes...\n", KernelSize));
-
-  Status = OcFindWritableOcFileSystem (&Root);
+  Status = gRT->GetTime (&BootTime, NULL);
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_WARN, "OC: Could not find writable filesystem to dump kernel - %r\n", Status));
+    ZeroMem (&BootTime, sizeof (BootTime));
+    BootTime.Year = 2077;
+  }
+
+  MajorXnu = DarwinVersion / 10000;
+  MinorXnu = (DarwinVersion / 100) % 100;
+  PatchXnu = DarwinVersion % 100;
+
+  Prefix = NULL;
+
+  if (DumpType == DUMP_TYPE_PREPATCHED) {
+    if (KernelType == KERNEL_TYPE_PRELINKED) {
+      Prefix = L"PrePatchedPrelinkedKernel";
+    } else if (KernelType == KERNEL_TYPE_MKEXT) {
+      Prefix = L"PrePatchedMkext";
+    } else {
+      Prefix = L"PrePatchedKernel";
+    }
+  } else if (DumpType == DUMP_TYPE_PREPROCESSED) {
+    if (KernelType == KERNEL_TYPE_PRELINKED) {
+      Prefix = L"PreProcessedPrelinkedKernel";
+    }
+    // Add other kernel types if needed for pre-processing dump
+  } else { // DUMP_TYPE_PATCHED
+    if (KernelType == KERNEL_TYPE_PRELINKED) {
+      Prefix = L"PatchedPrelinkedKernel";
+    } else if (KernelType == KERNEL_TYPE_MKEXT) {
+      Prefix = L"PatchedMkext";
+    } else {
+      Prefix = L"PatchedKernel";
+    }
+  }
+  
+  if (Prefix == NULL) {
+    DEBUG ((DEBUG_WARN, "OC: Unknown dump type %d for kernel type %d\n", DumpType, KernelType));
     return;
   }
 
-  Status = Root->Open (
-                   Root,
-                   &FileHandle,
-                   FileName,
-                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
-                   0
-                   );
+  //
+  // Construct the filename. e.g., PatchedPrelinkedKernel-2025-06-25-111300-16-7-0
+  //
+  UnicodeSPrint (
+    FileName,
+    sizeof (FileName),
+    L"%s-%04u-%02u-%02u-%02u%02u%02u-%u.%u.%u",
+    Prefix,
+    BootTime.Year,
+    BootTime.Month,
+    BootTime.Day,
+    BootTime.Hour,
+    BootTime.Minute,
+    BootTime.Second,
+    MajorXnu,
+    MinorXnu,
+    PatchXnu
+    );
 
+  DEBUG ((DEBUG_INFO, "OC: Dumping buffer to %s (%u bytes)...\n", FileName, BufferSize));
+
+  Status = OcFindWritableOcFileSystem (&Root);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Could not find writable filesystem to dump - %r\n", Status));
+    return;
+  }
+
+  Status = Root->Open (Root, &FileHandle, FileName, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
   if (!EFI_ERROR (Status)) {
-    //
-    // File exists, so delete it. We can ignore the status of the deletion.
-    //
     FileHandle->Delete (FileHandle);
-    DEBUG ((DEBUG_INFO, "OC: Deleting existing dumped Kernel Bin...\n"));
   }
 
   Status = Root->Open (
@@ -90,18 +539,95 @@ DumpKernelToFile (
                    );
 
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_WARN, "OC: Failed to create PatchedKernel.bin - %r\n", Status));
+    DEBUG ((DEBUG_WARN, "OC: Failed to create %s - %r\n", FileName, Status));
     Root->Close (Root);
     return;
   }
 
-  BufferSize = KernelSize;
-  Status     = FileHandle->Write (FileHandle, &BufferSize, KernelBuffer);
+  WriteSize = BufferSize;
+  Status    = FileHandle->Write (FileHandle, &WriteSize, Buffer);
 
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_WARN, "OC: Failed to write to PatchedKernel.bin - %r\n", Status));
+    DEBUG ((DEBUG_WARN, "OC: Failed to write to %s - %r\n", FileName, Status));
   } else {
-    DEBUG ((DEBUG_INFO, "OC: Successfully dumped %u bytes to PatchedKernel.bin\n", (UINT32)BufferSize));
+    DEBUG ((DEBUG_INFO, "OC: Successfully dumped %u bytes to %s\n", (UINT32)WriteSize, FileName));
+  }
+
+  FileHandle->Close (FileHandle);
+  Root->Close (Root);
+}
+
+STATIC
+VOID
+OcDumpVirtualizedKernel (
+  IN VOID       *Buffer,
+  IN UINT32     BufferSize
+  )
+{
+  EFI_STATUS         Status;
+  EFI_FILE_PROTOCOL  *Root;
+  EFI_FILE_PROTOCOL  *FileHandle;
+  CHAR16             FileName[128];
+  UINTN              WriteSize;
+  EFI_TIME           BootTime;
+
+  //
+  // Construct a unique filename to avoid overwrites.
+  //
+  Status = gRT->GetTime (&BootTime, NULL);
+  if (EFI_ERROR (Status)) {
+    ZeroMem (&BootTime, sizeof (BootTime));
+    BootTime.Year = 2077;
+  }
+
+  UnicodeSPrint (
+    FileName,
+    sizeof (FileName),
+    L"VirtualizedKernel-%04u-%02u-%02u-%02u%02u%02u",
+    BootTime.Year,
+    BootTime.Month,
+    BootTime.Day,
+    BootTime.Hour,
+    BootTime.Minute,
+    BootTime.Second
+    );
+
+  DEBUG ((DEBUG_INFO, "OC: Dumping virtualized kernel to %s (%u bytes)...\n", FileName, BufferSize));
+  Status = OcFindWritableOcFileSystem (&Root);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Could not find writable filesystem for virtualized dump - %r\n", Status));
+    return;
+  }
+
+  Status = Root->Open (Root, &FileHandle, FileName, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (!EFI_ERROR (Status)) {
+    FileHandle->Delete (FileHandle);
+  }
+
+  Status = Root->Open (
+                   Root,
+                   &FileHandle,
+                   FileName,
+                   EFI_FILE_MODE_CREATE | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_READ,
+                   0
+                   );
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Failed to create virtualized dump %s - %r\n", FileName, Status));
+    Root->Close (Root);
+    return;
+  }
+
+  //
+  // Write the buffer to the file.
+  //
+  WriteSize = BufferSize;
+  Status    = FileHandle->Write (FileHandle, &WriteSize, Buffer);
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Failed to write to virtualized dump %s - %r\n", FileName, Status));
+  } else {
+    DEBUG ((DEBUG_INFO, "OC: Successfully dumped virtualized kernel to %s\n", FileName));
   }
 
   FileHandle->Close (FileHandle);
@@ -846,6 +1372,18 @@ OcKernelProcessPrelinked (
   Status = PrelinkedContextInit (&Context, Kernel, *KernelSize, AllocatedSize, Is32Bit);
 
   if (!EFI_ERROR (Status)) {
+
+    //
+    // Dump the buffer after context initialization but before any modifications.
+    //
+    OcKernelDumpBuffer (
+      Kernel,
+      *KernelSize,
+      DUMP_TYPE_PREPROCESSED,
+      KERNEL_TYPE_PRELINKED,
+      DarwinVersion
+      );
+    
     OcKernelBlockKexts (Config, DarwinVersion, Is32Bit, CacheTypePrelinked, &Context);
 
     OcKernelInjectKexts (Config, CacheTypePrelinked, &Context, DarwinVersion, Is32Bit, LinkedExpansion, ReservedExeSize);
@@ -1005,6 +1543,12 @@ OcKernelReadAppleKernel (
     ));
 
   if (!EFI_ERROR (Status)) {
+
+    //
+    // Scan for signatures to verify kernel contents.
+    //
+    OcTestAMDSignatures (*Kernel, *KernelSize);
+
     //
     // 10.6 and below may keep older prelinkedkernels around, do not load those.
     //
@@ -1186,6 +1730,7 @@ OcKernelFileOpen (
   UINT32             ReservedFullSize;
   CHAR16             *NewFileName;
   EFI_FILE_PROTOCOL  *EspNewHandle;
+  KERNEL_TYPE        CurrentKernelType;
 
   if (mCustomKernelDirectoryInProgress) {
     DEBUG ((DEBUG_INFO, "OC: Skipping OpenFile hooking on ESP Kernels directory\n"));
@@ -1306,23 +1851,39 @@ OcKernelFileOpen (
     // Change the target to the custom one if requested CustomKernel.
     //
     if (mCustomKernelDirectory != NULL) {
-      DEBUG ((DEBUG_INFO, "OC: Redirecting %s to the custom one on ESP\n", FileName));
+      if ((Attributes & EFI_FILE_DIRECTORY) != 0) {
+        return OcSafeFileOpen (This, NewHandle, FileName, OpenMode, Attributes);
+      }
+
+      DEBUG ((DEBUG_INFO, "OC: boot.efi original requested path: %s\n", FileName));
+
       NewFileName = OcStrrChr (FileName, L'\\');
       if (NewFileName == NULL) {
         NewFileName = FileName;
+      } else {
+        NewFileName++;
       }
 
-      DEBUG ((DEBUG_INFO, "OC: Filename after redirection: %s\n", NewFileName));
+      DEBUG ((DEBUG_INFO, "OC: Attempting to open filename '%s' inside the Kernels directory.\n", NewFileName));
 
       mCustomKernelDirectoryInProgress = TRUE;
       Status                           = OcSafeFileOpen (mCustomKernelDirectory, &EspNewHandle, NewFileName, OpenMode, Attributes);
       mCustomKernelDirectoryInProgress = FALSE;
+
+      DEBUG ((DEBUG_INFO, "OC: OcSafeFileOpen status: %r\n", Status));
+
       if (!EFI_ERROR (Status)) {
+        DEBUG ((DEBUG_INFO, "OC: Custom kernel opened. Redirecting file handle.\n"));
+
         (*NewHandle)->Close (*NewHandle);
 
         This       = mCustomKernelDirectory;
         *NewHandle = EspNewHandle;
         FileName   = NewFileName;
+
+        DEBUG ((DEBUG_INFO, "OC: Redirection is complete.\n"));
+      } else {
+        DEBUG ((DEBUG_WARN, "OC: Could not open custom kernel. Continuing with original path.\n"));
       }
     }
 
@@ -1353,6 +1914,20 @@ OcKernelFileOpen (
     }
 
     if (!EFI_ERROR (Status)) {
+
+      //
+      // Dump kernel before patching.
+      //
+      if (  (OcStriStr (FileName, L"kernelcache") != NULL)
+         || (OcStriStr (FileName, L"prelinkedkernel") != NULL))
+      {
+        CurrentKernelType = KERNEL_TYPE_PRELINKED;
+        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+      } else {
+        CurrentKernelType = KERNEL_TYPE_PLAIN;
+        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+      }
+
       //
       // Disable prelinked if forcing mkext or cacheless, but only on appropriate versions.
       // We also disable prelinked on 10.5 or older due to prelinked on those versions being unsupported.
@@ -1372,6 +1947,11 @@ OcKernelFileOpen (
       }
 
       //
+      // Scan for signatures to verify kernel contents.
+      //
+      OcTestAMDSignatures (Kernel, KernelSize);
+
+      //
       // Apply patches to kernel itself, and then process prelinked.
       //
       OcKernelApplyPatches (
@@ -1385,6 +1965,11 @@ OcKernelFileOpen (
         KernelSize
         );
 
+      // Dump modified buffer
+      if (!EFI_ERROR (OcKernelApplyPatches)) {
+        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, CurrentKernelType, mOcDarwinVersion);
+      }
+
       PrelinkedStatus = OcKernelProcessPrelinked (
                           mOcConfiguration,
                           mOcDarwinVersion,
@@ -1397,10 +1982,6 @@ OcKernelFileOpen (
                           );
 
       DEBUG ((DEBUG_INFO, "OC: Prelinked status - %r\n", PrelinkedStatus));
-
-      if (!EFI_ERROR (PrelinkedStatus)) {
-        DumpKernelToFile (Kernel, KernelSize);
-      }
 
       Status = OcGetFileModificationTime (*NewHandle, &ModificationTime);
       if (EFI_ERROR (Status)) {
@@ -1418,6 +1999,13 @@ OcKernelFileOpen (
         FreePool (Kernel);
         return EFI_OUT_OF_RESOURCES;
       }
+
+      OcDumpVirtualizedKernel (Kernel, KernelSize);
+
+      //
+      // Scan for signatures to verify kernel contents.
+      //
+      OcTestAMDSignatures (Kernel, KernelSize);
 
       if (UseSecureBoot) {
         OcAppleImg4RegisterOverride (mKernelDigest, Kernel, KernelSize);
@@ -1444,6 +2032,11 @@ OcKernelFileOpen (
 
       return EFI_NOT_FOUND;
     }
+
+    //
+    // Dump kernel before patching.
+    //
+    OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
 
     OcKernelLoadKextsAndReserve (
       This,
@@ -1479,6 +2072,11 @@ OcKernelFileOpen (
 
     if (!EFI_ERROR (Status)) {
       //
+      // Scan for signatures to verify kernel contents.
+      //
+      OcTestAMDSignatures (Kernel, KernelSize);
+
+      //
       // Process mkext.
       //
       Status = OcKernelProcessMkext (
@@ -1492,7 +2090,7 @@ OcKernelFileOpen (
       DEBUG ((DEBUG_INFO, "OC: Mkext status - %r\n", Status));
 
       if (!EFI_ERROR (Status)) {
-        DumpKernelToFile (Kernel, KernelSize);
+        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
       }
 
       if (!EFI_ERROR (Status)) {
@@ -1512,6 +2110,13 @@ OcKernelFileOpen (
           FreePool (Kernel);
           return EFI_OUT_OF_RESOURCES;
         }
+
+        OcDumpVirtualizedKernel (Kernel, KernelSize);
+
+        //
+        // Scan for signatures to verify kernel contents.
+        //
+        OcTestAMDSignatures (Kernel, KernelSize);
 
         *NewHandle = VirtualFileHandle;
         return EFI_SUCCESS;
