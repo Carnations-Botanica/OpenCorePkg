@@ -315,15 +315,15 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B901000100",
                                            NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x00174640");
     OcTestKernelPatch (Kernel, KernelSize, "C1E81AFFC089",
-                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x00174CA5");
+                                           NULL, "_cpuid_set_info | Force cpuid_cores_per_package", "0x00174CA5");
     OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
                                            "66906690669090", "_commpage_populate | Remove rdmsr", "0x0018AA3F");
     OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F14489",
-                                           "B81D0000804489F14489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x00174C63");
+                                           "B81D0000804489F14489", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x00174C63");
     OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
                                            "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001737D0");
     OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
-                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x0017381B");
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x0017381B");
     OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
                                            "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x00173897");
     OcTestKernelPatch (Kernel, KernelSize, "003A0F82",
@@ -335,7 +335,7 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
                                            "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
     OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
-                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x0018DC1D");
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x0018DC1D");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF81CA00000100B977020000",
                                            "B977020000B806010700BA060107000F1F4000", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x00194459");
   
@@ -346,15 +346,15 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B901000100",
                                            NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x003F64F6");
     OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC289",
-                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x001ED1FE");
+                                           NULL, "_cpuid_set_info | Force cpuid_cores_per_package", "0x001ED1FE");
     OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
                                            "66906690669090", "_commpage_populate | Remove rdmsr", "0x0020194B");
     OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F94489",
-                                           "B81D0000804489F94489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x001ED1B3");
+                                           "B81D0000804489F94489", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x001ED1B3");
     OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
                                            "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001EC21E");
     OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
-                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x001EC269");
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x001EC269");
     OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
                                            "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x001EC2E4");
     OcTestKernelPatch (Kernel, KernelSize, "0FB60552A3700083F83A0F82B1000000",
@@ -366,7 +366,7 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
                                            "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
     OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
-                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x00204CBD");
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x00204CBD");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
                                            "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x0020BA99");
   } else if (MajorDarwinVersion == 15) {
@@ -375,15 +375,15 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B901000100",
                                            NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", "0x003CA970");
     OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC289",
-                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", "0x001BC58E");
+                                           NULL, "_cpuid_set_info | Force cpuid_cores_per_package", "0x001BC58E");
     OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
                                            "66906690669090", "_commpage_populate | Remove rdmsr", "0x001D1B56");
     OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F94489",
-                                           "B81D0000804489F94489", "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", "0x001BC543");
+                                           "B81D0000804489F94489", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x001BC543");
     OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
                                            "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x001BB51E");
     OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
-                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B)", "0x001BB569");
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x001BB569");
     OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
                                            "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x001BB5E4");
     OcTestKernelPatch (Kernel, KernelSize, "0FB60519A0700083F83A0F82B1000000",
@@ -395,38 +395,38 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809C2BF5802310531C94531C0",
                                            "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
     OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
-                                           "25FC0000000F1F00", "_lapic_init | Remove version check", "0x001D4FEB");
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x001D4FEB");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
                                            "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x001DC3D8");
   } else if (MajorDarwinVersion == 14) {
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "PanicKextDump", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
+                                           NULL, "PanicKextDump", "0x007F2401");
     OcTestKernelPatch (Kernel, KernelSize, NULL,
                                            NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "Force cpuid_cores_per_package | user defined CPU cores", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_commpage_populate | Remove rdmsr", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_cache_info | Update Intel Leaf to AMD Leaf", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_generic_info | Remove wrmsr(0x8B)", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_generic_info | Replace rdmsr(0x8B)", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_generic_info | Set flag=1", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_generic_info | Disable Check for Leaf 7", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "Strings Replace | GenuineIntel/AuthenticAMD Vendor", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_lapic_init | Remove version check", NULL);
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "_mtrr_update_action | Set PAT MSR to 00070106h", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "41C1EE1A41FFC644",
+                                           "41BE040000006690", "_cpuid_set_info | Force cpuid_cores_per_package", "0x0020575A");
+    OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                           "66906690669090", "_commpage_populate | Remove rdmsr", "0x00219E8D");
+    OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F90FA2",
+                                           "B81D0000804489F90FA2", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x002056F6");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                           "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x00204808");
+    OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                           "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x00204856");
+    OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                           "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x002048D1");
+    OcTestKernelPatch (Kernel, KernelSize, "0FB605AF9D6B0083F83A0F82B9000000",
+                                           "0FB605AF9D6B0083F8000F82B9000000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x00205297");
+    OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                           "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x00782D07");
+    OcTestKernelPatch (Kernel, KernelSize, "31DB0FB6C883F9060F8586000000",
+                                           "BBBC4FEA78E98A0000000F1F4000", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x002053D5");
+    OcTestKernelPatch (Kernel, KernelSize, "B9990100000F3248C1E22089C64809D6B9980100000F3248C1E22089C04809D0BF5802310531C94531C0",
+                                           "660F1F840000000000660F1F840000000000660F1F840000000000660F1F840000000000660F1F440000", "_i386_init/_pstate_trace | Remove rdmsr calls", NULL);
+    OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                           "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x0021D0D3");
+    OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
+                                           "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x00223C88");
   } else {
   // For any other detected unsupported version
     DEBUG ((

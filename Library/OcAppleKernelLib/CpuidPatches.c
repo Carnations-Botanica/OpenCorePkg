@@ -2263,7 +2263,7 @@ PatchProvideCurrentCpuInfo (
   //
   // This value is used if the MSR 0x35 is read as zero, typically on VMs or AMD processors.
   //
-  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_TIGER_MIN, 0)) {
+  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_EL_CAPITAN_MIN, 0)) { // This is reverted because the logic seems to be missing below EL Cap
     //
     // 10.15 and above have two instances that need patching.
     //
