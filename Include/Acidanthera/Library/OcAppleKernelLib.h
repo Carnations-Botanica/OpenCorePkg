@@ -547,6 +547,10 @@ typedef enum {
   //
   KernelQuirkAppleXcpmForceBoost,
   //
+  // Apply AMD kernel patches.
+  //
+  KernelQuirkApplyAMDKernelPatches,
+  //
   // Apply regiser base change patch for customised PCI serial device to XNU.
   //
   KernelQuirkCustomPciSerialDevice,

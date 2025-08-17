@@ -286,6 +286,7 @@ OC_DECLARE (OC_KERNEL_PATCH_ARRAY)
   _(BOOLEAN                     , AppleXcpmCfgLock            ,     , FALSE  , ()) \
   _(BOOLEAN                     , AppleXcpmExtraMsrs          ,     , FALSE  , ()) \
   _(BOOLEAN                     , AppleXcpmForceBoost         ,     , FALSE  , ()) \
+  _(BOOLEAN                     , ApplyAMDKernelPatches       ,     , FALSE  , ()) \
   _(BOOLEAN                     , CustomPciSerialDevice       ,     , FALSE  , ()) \
   _(BOOLEAN                     , CustomSmbiosGuid            ,     , FALSE  , ()) \
   _(BOOLEAN                     , DisableIoMapper             ,     , FALSE  , ()) \

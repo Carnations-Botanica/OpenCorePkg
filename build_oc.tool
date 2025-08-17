@@ -391,7 +391,14 @@ package() {
 
 cd "$(dirname "$0")" || exit 1
 if [ "$ARCHS" = "" ]; then
-  ARCHS=(X64 IA32)
+  ARCHS=(X64) # IA32 is broken on latest Xcode SDK
+  #/Users/royalgraphx/Carnations/Branches/OpenCorePkg/UDK/OpenCorePkg/Library/OcCompressionLib/zlib/zutil.h:170:11: error: 'OS_CODE' macro redefined [-Werror,-Wmacro-redefined]
+  #  170 | #  define OS_CODE 19
+  #      |           ^
+  #/Users/royalgraphx/Carnations/Branches/OpenCorePkg/UDK/OpenCorePkg/Library/OcCompressionLib/zlib/zutil.h:141:11: note: previous definition is here
+  #  141 | #  define OS_CODE  7
+  #      |           ^
+  #1 error generated.
   export ARCHS
 fi
 SELFPKG=OpenCorePkg

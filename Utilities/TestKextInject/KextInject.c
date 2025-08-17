@@ -294,6 +294,14 @@ ApplyKextPatches (
     DEBUG ((DEBUG_WARN, "[OK] Success KernelQuirkAppleCpuPmCfgLock\n"));
   }
 
+  Status = PrelinkedContextApplyQuirk (Context, KernelQuirkApplyAMDKernelPatches, KernelVersion);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "[FAIL] Failed to apply KernelQuirkApplyAMDKernelPatches - %r\n", Status));
+    FailedToProcess = TRUE;
+  } else {
+    DEBUG ((DEBUG_WARN, "[OK] Success KernelQuirkApplyAMDKernelPatches\n"));
+  }
+
   Status = PrelinkedContextApplyQuirk (Context, KernelQuirkCustomSmbiosGuid1, KernelVersion);
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_WARN, "[FAIL] Failed to apply KernelQuirkCustomSmbiosGuid1 - %r\n", Status));

@@ -208,6 +208,11 @@ OcKernelApplyPatches (
       OcKernelApplyQuirk (KernelQuirkAppleXcpmForceBoost, CacheType, DarwinVersion, NULL, &KernelPatcher);
     }
 
+    if (Config->Kernel.Quirks.ApplyAMDKernelPatches) {
+      DEBUG ((DEBUG_INFO, "OC: Applying AMD Kernel Patches as requested by configuration\n"));
+      OcKernelApplyQuirk (KernelQuirkApplyAMDKernelPatches, CacheType, DarwinVersion, NULL, &KernelPatcher);
+    }
+
     //
     // Only apply the patch when Misc->Serial->Custom is set (i.e. Override).
     //

@@ -2946,6 +2946,228 @@ PatchSetApfsTrimTimeout (
   return EFI_SUCCESS;
 }
 
+STATIC
+CONST UINT8
+  mCpuidCoresPerPackageFind[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+STATIC
+CONST UINT8
+  mCpuidCoresPerPackageFindMask[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+STATIC
+CONST UINT8
+  mCpuidCoresPerPackageReplace[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+STATIC
+CONST UINT8
+  mCpuidCoresPerPackageReplaceMask[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+STATIC
+PATCHER_GENERIC_PATCH
+  mCpuidCoresPerPackagePatch = {
+  .Comment     = DEBUG_POINTER ("Set cpuid_cores_per_package to Constant"),
+  .Base        = "_cpuid_set_info",
+  .Find        = NULL,
+  .Mask        = NULL,
+  .Replace     = NULL,
+  .ReplaceMask = NULL,
+  .Size        = 0,
+  .Count       = 1,
+  .Skip        = 0,
+  .Limit       = 0
+};
+
+STATIC
+EFI_STATUS
+ApplyCpuidCoresPerPackagePatch (
+  IN OUT PATCHER_CONTEXT  *Patcher,
+  IN     UINT32           CoreCount,
+  IN     UINT32           KernelVersion
+  )
+{
+  EFI_STATUS  Status = EFI_SUCCESS;
+  UINT8       CoresPerPackageFind[6];
+  UINT8       CoresPerPackageFindMask[6];
+  UINT8       CoresPerPackageReplace[6];
+  UINT8       CoresPerPackageReplaceMask[6];
+  UINT32      CoresPerPackageSize = sizeof (mCpuidCoresPerPackageFind);
+  
+  DEBUG ((DEBUG_INFO, "OCAMD: ApplyCpuidCoresPerPackagePatch has been called for kernel version: %u\n", KernelVersion));
+  
+  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION (KERNEL_VERSION_HIGH_SIERRA, 0, 0), KERNEL_VERSION (KERNEL_VERSION_MOJAVE, 99, 99))) {
+    DEBUG ((DEBUG_INFO, "OCAMD: Logic for 10.13 -> 10.14 selected.\n")); // This current section ONLY exists to please the compiler for unused variables
+    // This really needs some serious work, leftovers before 13.3+ was working
+    
+     // Populate the local arrays from the global constants
+    CopyMem (CoresPerPackageFind, mCpuidCoresPerPackageFind, sizeof (mCpuidCoresPerPackageFind));
+    CopyMem (CoresPerPackageFindMask, mCpuidCoresPerPackageFindMask, sizeof (mCpuidCoresPerPackageFindMask));
+    CopyMem (CoresPerPackageReplace, mCpuidCoresPerPackageReplace, sizeof (mCpuidCoresPerPackageReplace));
+    CopyMem (CoresPerPackageReplaceMask, mCpuidCoresPerPackageReplaceMask, sizeof (mCpuidCoresPerPackageReplaceMask));
+
+    // Update the Replace data with the required Constant
+    CoresPerPackageReplace[1] = (UINT8)CoreCount;
+
+    // Now, populate the patch structure with the local arrays
+    mCpuidCoresPerPackagePatch.Find        = CoresPerPackageFind;
+    mCpuidCoresPerPackagePatch.Mask        = CoresPerPackageFindMask;
+    mCpuidCoresPerPackagePatch.Replace     = CoresPerPackageReplace;
+    mCpuidCoresPerPackagePatch.ReplaceMask = CoresPerPackageReplaceMask;
+    mCpuidCoresPerPackagePatch.Size        = CoresPerPackageSize;
+    
+    Status = PatcherApplyGenericPatch (Patcher, &mCpuidCoresPerPackagePatch);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to apply cores per package patch for 10.13-10.14 - %r\n", Status));
+    } else {
+      DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success for 10.13-10.14\n"));
+    }
+  }
+  else if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION (KERNEL_VERSION_CATALINA, 0, 0), KERNEL_VERSION (KERNEL_VERSION_BIG_SUR, 0, 0))) {
+    DEBUG ((DEBUG_INFO, "OCAMD: Logic for 10.15 -> 11.0 selected.\n"));
+    
+    // Placeholder area for new logic
+
+    Status = PatcherApplyGenericPatch (Patcher, &mCpuidCoresPerPackagePatch);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to apply cores per package patch for 10.15-11.0 - %r\n", Status));
+    } else {
+      DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success for 10.15-11.0\n"));
+    }
+  }
+  else if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION (KERNEL_VERSION_MONTEREY, 0, 0), KERNEL_VERSION (KERNEL_VERSION_VENTURA, 2, 99))) {
+    DEBUG ((DEBUG_INFO, "OCAMD: Logic for 12.0 -> 13.2 selected.\n"));
+    
+    // Placeholder area for new logic
+
+    Status = PatcherApplyGenericPatch (Patcher, &mCpuidCoresPerPackagePatch);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to apply cores per package patch for 12.0-13.2 - %r\n", Status));
+    } else {
+      DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success for 12.0-13.2\n"));
+    }
+  }
+  else if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION (KERNEL_VERSION_VENTURA, 3, 0), KERNEL_VERSION (25, 99, 99))) {
+    DEBUG ((DEBUG_INFO, "OCAMD: Logic for 13.3+ selected.\n"));
+    
+    // Find data from AMD Vanilla Patches
+    // C1 E8 1A 00 00
+    UINT8 mCpuidCoresPerPackageFindShort[5] = { 0xC1, 0xE8, 0x1A, 0x00, 0x00 };
+
+    // Find Mask data from AMD Vanilla Patches
+    // FF FD FF 00 00
+    UINT8 mCpuidCoresPerPackageFindMaskShort[5] = { 0xFF, 0xFD, 0xFF, 0x00, 0x00 };
+
+    // Replace data from AMD Vanilla Patches
+    // BA 00 00 00 00
+    UINT8 mCpuidCoresPerPackageReplaceShort[5] = { 0xBA, 0x00, 0x00, 0x00, 0x00 };
+
+    // Replace Mask data from AMD Vanilla Patches
+    // FF FF FF FF FF
+    UINT8 mCpuidCoresPerPackageReplaceMaskShort[5] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+    // Update the Replace data with the required Constant
+    mCpuidCoresPerPackageReplaceShort[1] = (UINT8)CoreCount;
+
+    // Now, populate the patch structure with the local arrays
+    mCpuidCoresPerPackagePatch.Find        = mCpuidCoresPerPackageFindShort;
+    mCpuidCoresPerPackagePatch.Mask        = mCpuidCoresPerPackageFindMaskShort;
+    mCpuidCoresPerPackagePatch.Replace     = mCpuidCoresPerPackageReplaceShort;
+    mCpuidCoresPerPackagePatch.ReplaceMask = mCpuidCoresPerPackageReplaceMaskShort;
+    mCpuidCoresPerPackagePatch.Size        = sizeof (mCpuidCoresPerPackageFindShort);
+
+    // Dump the populated data
+    DEBUG ((
+      DEBUG_INFO,
+      "OCAMD: [OK] Dynamically created find value %02X%02X%02X%02X%02X\n",
+      mCpuidCoresPerPackagePatch.Find[0],
+      mCpuidCoresPerPackagePatch.Find[1],
+      mCpuidCoresPerPackagePatch.Find[2],
+      mCpuidCoresPerPackagePatch.Find[3],
+      mCpuidCoresPerPackagePatch.Find[4]
+    ));
+
+    DEBUG ((
+      DEBUG_INFO,
+      "OCAMD: [OK] Dynamically created find mask value %02X%02X%02X%02X%02X\n",
+      mCpuidCoresPerPackagePatch.Mask[0],
+      mCpuidCoresPerPackagePatch.Mask[1],
+      mCpuidCoresPerPackagePatch.Mask[2],
+      mCpuidCoresPerPackagePatch.Mask[3],
+      mCpuidCoresPerPackagePatch.Mask[4]
+    ));
+
+    DEBUG ((
+      DEBUG_INFO,
+      "OCAMD: [OK] Dynamically updated replacement value %02X%02X%02X%02X%02X\n",
+      mCpuidCoresPerPackagePatch.Replace[0],
+      mCpuidCoresPerPackagePatch.Replace[1],
+      mCpuidCoresPerPackagePatch.Replace[2],
+      mCpuidCoresPerPackagePatch.Replace[3],
+      mCpuidCoresPerPackagePatch.Replace[4]
+    ));
+
+    DEBUG ((
+      DEBUG_INFO,
+      "OCAMD: [OK] Dynamically created replacement mask value %02X%02X%02X%02X%02X\n",
+      mCpuidCoresPerPackagePatch.ReplaceMask[0],
+      mCpuidCoresPerPackagePatch.ReplaceMask[1],
+      mCpuidCoresPerPackagePatch.ReplaceMask[2],
+      mCpuidCoresPerPackagePatch.ReplaceMask[3],
+      mCpuidCoresPerPackagePatch.ReplaceMask[4]
+    ));
+
+    Status = PatcherApplyGenericPatch (Patcher, &mCpuidCoresPerPackagePatch);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to apply cores per package patch for 13.3+ - %r\n", Status));
+    } else {
+      DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success for 13.3+\n"));
+    }
+  } else {
+    DEBUG ((DEBUG_INFO, "OCAMD: Skipping cores per package patch on %u, unsupported kernel version.\n", KernelVersion));
+  }
+  
+  return Status;
+}
+
+STATIC
+EFI_STATUS
+PatchApplyAMDKernelPatches (
+  IN OUT PATCHER_CONTEXT  *Patcher,
+  IN     UINT32           KernelVersion
+  )
+{
+  EFI_STATUS  Status;
+  OC_CPU_INFO CpuInfo;
+
+  if (Patcher == NULL) {
+    DEBUG ((DEBUG_INFO, "OCAK: [OK] Skipping %a on NULL Patcher on %u\n", __func__, KernelVersion));
+    return EFI_NOT_FOUND;
+  }
+
+  OcCpuScanProcessor (&CpuInfo);
+  DEBUG ((
+    DEBUG_INFO,
+    "OCAMD: [OK] Found %u cores and %u threads.\n",
+    CpuInfo.CoreCount,
+    CpuInfo.ThreadCount
+  ));
+
+  // List of Patches which will attempt to apply
+  Status = ApplyCpuidCoresPerPackagePatch (Patcher, CpuInfo.CoreCount, KernelVersion);
+  // Still in progress, it's 4am and I open shift in 3 hours for work.
+  
+  DEBUG ((DEBUG_INFO, "OCAMD: [OK] PatchApplyAMDKernelPatches finished attempts.\n"));
+
+  return Status;
+}
+
 //
 // Quirks table.
 //
@@ -2954,6 +3176,7 @@ KERNEL_QUIRK  gKernelQuirks[] = {
   [KernelQuirkAppleXcpmCfgLock]        = { NULL,                                            PatchAppleXcpmCfgLock       },
   [KernelQuirkAppleXcpmExtraMsrs]      = { NULL,                                            PatchAppleXcpmExtraMsrs     },
   [KernelQuirkAppleXcpmForceBoost]     = { NULL,                                            PatchAppleXcpmForceBoost    },
+  [KernelQuirkApplyAMDKernelPatches]   = { NULL,                                            PatchApplyAMDKernelPatches  },
   [KernelQuirkCustomPciSerialDevice]   = { NULL,                                            PatchCustomPciSerialDevice  },
   [KernelQuirkCustomSmbiosGuid1]       = { "com.apple.driver.AppleSMBIOS",                  PatchCustomSmbiosGuid       },
   [KernelQuirkCustomSmbiosGuid2]       = { "com.apple.driver.AppleACPIPlatform",            PatchCustomSmbiosGuid       },
