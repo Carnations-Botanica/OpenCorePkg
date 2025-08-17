@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 **/
 
 #include <Base.h>
+#include <stdbool.h>
 
 #include <Library/OcMainLib.h>
 
@@ -42,6 +43,13 @@ typedef enum {
   KERNEL_TYPE_MKEXT
 } KERNEL_TYPE;
 
+typedef enum {
+  KERNEL_BUILD_UNKNOWN,
+  KERNEL_BUILD_RELEASE,
+  KERNEL_BUILD_DEBUG,
+  KERNEL_BUILD_DEVELOPMENT
+} APPLE_KERNEL_BUILD_TYPE;
+
 STATIC OC_STORAGE_CONTEXT  *mOcStorage;
 STATIC OC_GLOBAL_CONFIG    *mOcConfiguration;
 STATIC OC_CPU_INFO         *mOcCpuInfo;
@@ -55,6 +63,8 @@ STATIC BOOLEAN            mOcCachelessInProgress;
 
 STATIC EFI_FILE_PROTOCOL  *mCustomKernelDirectory;
 STATIC BOOLEAN            mCustomKernelDirectoryInProgress;
+
+static bool gMiscDebugPatchedKernelDump = FALSE;
 
 //
 // Helper to find all occurrences of Substring in String.
@@ -297,6 +307,44 @@ OcTestKernelPatch (
 }
 
 STATIC
+APPLE_KERNEL_BUILD_TYPE
+OcGetKernelBuildType (
+  IN CONST UINT8  *Kernel,
+  IN UINT32       KernelSize
+  )
+{
+  CONST CHAR8 *VersionString;
+  CONST UINTN SearchRange = 256;
+  UINTN       SearchSize;
+
+  VersionString = OcAsciiSearch (Kernel, KernelSize, "Darwin Kernel Version", L_STR_LEN("Darwin Kernel Version"));
+
+  if (VersionString != NULL) {
+    // Limit search to a reasonable range after the initial string to avoid scanning the whole file
+    SearchSize = KernelSize - (UINTN)(VersionString - (CONST CHAR8 *)Kernel);
+    if (SearchSize > SearchRange) {
+      SearchSize = SearchRange;
+    }
+
+    if (OcAsciiSearch (VersionString, SearchSize, "/RELEASE_", L_STR_LEN("/RELEASE_")) != NULL) {
+      DEBUG ((DEBUG_INFO, "OC: Detected RELEASE kernel build\n"));
+      return KERNEL_BUILD_RELEASE;
+    }
+    if (OcAsciiSearch (VersionString, SearchSize, "/DEBUG_", L_STR_LEN("/DEBUG_")) != NULL) {
+      DEBUG ((DEBUG_INFO, "OC: Detected DEBUG kernel build\n"));
+      return KERNEL_BUILD_DEBUG;
+    }
+    if (OcAsciiSearch (VersionString, SearchSize, "/DEVELOPMENT_", L_STR_LEN("/DEVELOPMENT_")) != NULL) {
+      DEBUG ((DEBUG_INFO, "OC: Detected DEVELOPMENT kernel build\n"));
+      return KERNEL_BUILD_DEVELOPMENT;
+    }
+  }
+
+  DEBUG ((DEBUG_INFO, "OC: Could not determine kernel build type, assuming UNKNOWN\n"));
+  return KERNEL_BUILD_UNKNOWN;
+}
+
+STATIC
 VOID
 OcTestAMDSignatures (
   IN CONST UINT8  *Kernel,
@@ -304,7 +352,12 @@ OcTestAMDSignatures (
   )
 {
   // Get the major Darwin version (e.g., 17 for 10.13.x, 16 for 10.12.x, and so on)
-  UINT32 MajorDarwinVersion = mOcDarwinVersion / 10000;
+  // Get the Kernel Build Type. This is required when testing patches across RELEASE/DEBUG/DEVELOPMENT
+  UINT32                  MajorDarwinVersion;
+  APPLE_KERNEL_BUILD_TYPE BuildType;
+
+  MajorDarwinVersion = mOcDarwinVersion / 10000;
+  BuildType = OcGetKernelBuildType(Kernel, KernelSize);
 
   DEBUG ((DEBUG_INFO, "OC: Running common Kernel Patch signature tests...\n"));
 
@@ -369,6 +422,7 @@ OcTestAMDSignatures (
                                            "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x00204CBD");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
                                            "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x0020BA99");
+  // Check if the current OS is El Capitan (Darwin 15)
   } else if (MajorDarwinVersion == 15) {
     OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
                                            NULL, "PanicKextDump", "0x007F15EE");
@@ -398,13 +452,12 @@ OcTestAMDSignatures (
                                            "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x001D4FEB");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
                                            "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x001DC3D8");
+  // Check if the current OS is Yosemite (Darwin 14)
   } else if (MajorDarwinVersion == 14) {
     OcTestKernelPatch (Kernel, KernelSize, "00252E2A7300",
                                            NULL, "PanicKextDump", "0x007F2401");
-    OcTestKernelPatch (Kernel, KernelSize, NULL,
-                                           NULL, "ProvideCurrentCpuInfoZeroMsrThreadCoreCount", NULL);
     OcTestKernelPatch (Kernel, KernelSize, "41C1EE1A41FFC644",
-                                           "41BE040000006690", "_cpuid_set_info | Force cpuid_cores_per_package", "0x0020575A");
+                                           NULL, "_cpuid_set_info | Force cpuid_cores_per_package", "0x0020575A");
     OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
                                            "66906690669090", "_commpage_populate | Remove rdmsr", "0x00219E8D");
     OcTestKernelPatch (Kernel, KernelSize, "B8040000004489F90FA2",
@@ -426,7 +479,218 @@ OcTestAMDSignatures (
     OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
                                            "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x0021D0D3");
     OcTestKernelPatch (Kernel, KernelSize, "89C081E2FFFFF0FF4881CA00000100B977020000",
-                                           "B806010700BA06010700660F1F84000000000090", "_mtrr_update_action | Set PAT MSR to 00070106h", "0x00223C88");
+                                           "B806010700BA06010700660F1F84000000000090", "_pat_init | Set PAT MSR to 00070106h", "0x00223C88");
+  // Yosemite Singular Patches In Order by File Offset:
+  // 0x00204808
+  // 0x00204856
+  // 0x002048D1
+  // 0x00205297
+  // 0x002053D5
+  // 0x002056F6
+  // 0x0020575A
+  // 0x00219E8D
+  // 0x0021D0D3
+  // 0x00223C88
+  // 0x00782D07
+  // Useful for future changes.
+  // Check if the current OS is Mavericks (Darwin 13)
+  } else if (MajorDarwinVersion == 13) {
+    switch (BuildType) {
+      case KERNEL_BUILD_RELEASE:
+        DEBUG ((DEBUG_INFO, "OC: Found RELEASE Mavericks kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                               "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x00000CBD66");
+        OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                               "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x00000CBDBE");
+        OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                               "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x00000CBE41");
+        OcTestKernelPatch (Kernel, KernelSize, "803D06585E003A",
+                                               "803D06585E0000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x00000CC840");
+        OcTestKernelPatch (Kernel, KernelSize, "31DB3C0675780FB6C46683F816",
+                                               "BBBC4FEA78E9310000000F1F00", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x00000CC933");
+        OcTestKernelPatch (Kernel, KernelSize, "B8040000004489E1",
+                                               "B81D0000804489E1", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x00000CCBB6");
+        OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC2",
+                                               NULL, "_cpuid_set_info | Force cpuid_cores_per_package", "0x00000CCC12");
+        OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                               "66906690669090", "_commpage_populate | Remove rdmsr", "0x00000DF141");
+        OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                               "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x00000E1164");
+        OcTestKernelPatch (Kernel, KernelSize, "8B0D531C5400",
+                                               "B9FFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x00000E35EF");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x0000510D28");
+        break;
+      case KERNEL_BUILD_DEBUG:
+        DEBUG ((DEBUG_INFO, "OC: Found DEBUG Mavericks kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "BF8B00000048BE0000000000000000E856250000",
+                                               "660F1F840000000000660F1F8400000000006690", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x0000198C26");
+        OcTestKernelPatch (Kernel, KernelSize, "BF8B000000E82E190000",
+                                               "48B800000000BA000000", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x0000198C48");
+        OcTestKernelPatch (Kernel, KernelSize, "E86418000048C1E83248250700000088C2",
+                                               "0F1F8400000000000F1F8000000000B201", "_cpuid_set_generic_info | Set flag=1", "0x00198D17");
+        OcTestKernelPatch (Kernel, KernelSize, "81F93A000000",
+                                               "81F900000000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x00001999E5");
+        OcTestKernelPatch (Kernel, KernelSize, "0FB6474C83E8068945F00F8532010000",
+                                               "C745F4BC4FEA78E9360100000F1F4000", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x0000199AA7");
+        OcTestKernelPatch (Kernel, KernelSize, "C745D004000000",
+                                               "C745D01D000080", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x0000199E4A");
+        OcTestKernelPatch (Kernel, KernelSize, "8B45D0C1E81AFFC0",
+                                               "B8040000000F1F00", "_cpuid_set_info | Force cpuid_cores_per_package", "0x0000199EC3");
+        OcTestKernelPatch (Kernel, KernelSize, "BFA0010000E8260E0000",
+                                               "660F1F84000000000090", "_commpage_init_cpu_capabilities | Remove rdmsr", "0x00001BB850");
+        OcTestKernelPatch (Kernel, KernelSize, "25FF0000003D14000000",
+                                               "25FF0000000F1F440000", "_lapic_init | Remove version check panic", "0x00001BECC5");
+        OcTestKernelPatch (Kernel, KernelSize, "8B0DC9A28800",
+                                               "B9FFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x00001C23F9");
+        OcTestKernelPatch (Kernel, KernelSize, "8945F4E810651700",
+                                               "EBFE909090909090", "_panic_epilogue | prevent reboot on panic", "0x0000042BF8");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x00008FF44A");
+        break;
+      case KERNEL_BUILD_DEVELOPMENT:
+        DEBUG ((DEBUG_INFO, "OC: Found DEVELOPMENT Mavericks kernel, skipping patches for now.\n"));
+        break;
+      default:
+        break;
+    }
+  } else if (MajorDarwinVersion == 12) {
+
+    switch (BuildType) {
+      case KERNEL_BUILD_RELEASE:
+        DEBUG ((DEBUG_INFO, "OC: Found RELEASE Mountain Lion kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "B98B00000031C031D20F30",
+                                               "6690669066906690669090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x00000A812B");
+        OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                               "BABA0000006690", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x00000A8183");
+        OcTestKernelPatch (Kernel, KernelSize, "B9170000000F32C1EA1280E207",
+                                               "B201660F1F8400000000006690", "_cpuid_set_generic_info | Set flag=1", "0x00000A8206");
+        OcTestKernelPatch (Kernel, KernelSize, "803D3D1460003A",
+                                               "803D3D14600000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x00000A8C09");
+        OcTestKernelPatch (Kernel, KernelSize, "31DB3C0675740FB6C431DB83F816",
+                                               "BBBC4FEA78E9320000000F1F4000", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x00000A8CFC");
+        OcTestKernelPatch (Kernel, KernelSize, "B8040000008B9D18FFFFFF4489F98B9514FFFFFF0FA2",
+                                               "B81D0000808B9D18FFFFFF4489F98B9514FFFFFF0FA2", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x00000A905E");
+        OcTestKernelPatch (Kernel, KernelSize, "C1EA1AFFC2",
+                                               "BA04000000", "_cpuid_set_info | Force cpuid_cores_per_package", "0x00000A90CC");
+        OcTestKernelPatch (Kernel, KernelSize, "B9A00100000F32",
+                                               "66906690669090", "_commpage_populate | Remove rdmsr", "0x00000BB5F8");
+        OcTestKernelPatch (Kernel, KernelSize, "25FC00000083F813",
+                                               "25FC0000000F1F00", "_lapic_init | Remove version check panic", "0x00000BD71B");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x00004AAE4A");
+        break;
+      case KERNEL_BUILD_DEBUG:
+        DEBUG ((DEBUG_INFO, "OC: Found DEBUG Mountain Lion kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "BF8B00000048BE0000000000000000E80F260000",
+                                               "660F1F840000000000660F1F8400000000006690", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x000017344D");
+        OcTestKernelPatch (Kernel, KernelSize, "BF8B000000E877160000",
+                                               "48B800000000BA000000", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x000017346F");
+        OcTestKernelPatch (Kernel, KernelSize, "E8AD15000048C1E83248250700000088C2",
+                                               "0F1F8400000000000F1F8000000000B201", "_cpuid_set_generic_info | Set flag=1", "0x000017353E");
+        OcTestKernelPatch (Kernel, KernelSize, "81F93A000000",
+                                               "81F900000000", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x0000174040");
+        OcTestKernelPatch (Kernel, KernelSize, "488B45F00FB6484C83F9060F85",
+                                               "C745ECBC4FEA78E90401000090", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x00001740F1");
+        OcTestKernelPatch (Kernel, KernelSize, "C745D0040000008B45CC8945D8E87E140000",
+                                               "C745D01D0000808B45CC8945D8E87E140000", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x0000174480");
+        OcTestKernelPatch (Kernel, KernelSize, "8B45D0C1E81AFFC0",
+                                               "B8020000000F1F00", "_cpuid_set_info | Force cpuid_cores_per_package", "0x00001744F4");
+        OcTestKernelPatch (Kernel, KernelSize, "BFA0010000E840100000",
+                                               "660F1F84000000000090", "_commpage_init_cpu_capabilities | Remove rdmsr", "0x000019BDD6");
+        OcTestKernelPatch (Kernel, KernelSize, "25FF0000003D14000000",
+                                               "25FF0000000F1F440000", "_lapic_init | Remove version check panic", "0x000019FB23");
+        OcTestKernelPatch (Kernel, KernelSize, "8B0D0A1C8800",
+                                               "B9FFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x00001A3B08");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x00008E037B");
+        break;
+      case KERNEL_BUILD_DEVELOPMENT:
+        DEBUG ((DEBUG_INFO, "OC: Found DEVELOPMENT Mountain Lion kernel, skipping patches for now.\n"));
+        break;
+      default:
+        break;
+    }
+  } else if (MajorDarwinVersion == 11) {
+    switch (BuildType) {
+      case KERNEL_BUILD_RELEASE:
+        DEBUG ((DEBUG_INFO, "OC: Found RELEASE Lion kernel, skipping patches for now.\n"));
+        break;
+      case KERNEL_BUILD_DEBUG:
+        DEBUG ((DEBUG_INFO, "OC: Found DEBUG Lion kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "B88B00000048B9000000000000000089C74889CE8985FCFEFFFFE87C0C0000",
+                                               "0F1F8400000000000F1F8400000000000F1F840000000000660F1F44000090", "_cpuid_set_generic_info | Remove wrmsr(0x8B)", "0x0000157EE5");
+        OcTestKernelPatch (Kernel, KernelSize, "8B85FCFEFFFF89C7E89C0C0000",
+                                               "48C7C0BA000000909090909090", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x0000157F17");
+        OcTestKernelPatch (Kernel, KernelSize, "B81700000089C7E8EF0B000048C1E8322403488B4DF888416D",
+                                               "488B4DF8C6416D019090909090909090909090909090909090", "_cpuid_set_generic_info | Set flag=1", "0x0000157FC5");
+        OcTestKernelPatch (Kernel, KernelSize, "488B45F88A404D3C3A",
+                                               "488B45F88A404D38C0", "_cpuid_set_generic_info | Disable Check for Leaf 7", "0x0000158B08");
+        OcTestKernelPatch (Kernel, KernelSize, "488B45F88A404C0FB6C083F806",
+                                               "C745ECBC4FEA78E99000000090", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x0000158C23");
+        OcTestKernelPatch (Kernel, KernelSize, "C745C8040000008B4DC4894DD04889C7E89F06",
+                                               "C745C81D0000808B4DC4894DD04889C7E89F06", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x00001572EC");
+        OcTestKernelPatch (Kernel, KernelSize, "C1E81A83C001",
+                                               "B80400000090", "_cpuid_set_info | Force cpuid_cores_per_package", "0x0000157371");
+        OcTestKernelPatch (Kernel, KernelSize, "B8A001000089C7E867000000",
+                                               "0F1F8400000000000F1F4000", "_commpage_init_cpu_capabilities | Remove rdmsr", "0x000017E4BD");
+        OcTestKernelPatch (Kernel, KernelSize, "81E1FF00000083F913",
+                                               "81E1FF000000909090", "_lapic_init | Remove version check panic", "0x0000181C11");
+        OcTestKernelPatch (Kernel, KernelSize, "8B0D6F7A8A00",
+                                               "B9FFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x00001844EB");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x000082323F");
+        break;
+      case KERNEL_BUILD_DEVELOPMENT:
+        DEBUG ((DEBUG_INFO, "OC: Found DEVELOPMENT Lion kernel, skipping patches for now.\n"));
+        break;
+      default:
+        break;
+    }
+  } else if (MajorDarwinVersion == 10) {
+    switch (BuildType) {
+      case KERNEL_BUILD_RELEASE:
+        DEBUG ((DEBUG_INFO, "OC: Found RELEASE Snow Leopard kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "B98B0000000F32",
+                                               "B8BA00000031D2", "_cpuid_set_info/_mca_dump | Replace rdmsr(0x8B)'s with constant 186", NULL);
+        OcTestKernelPatch (Kernel, KernelSize, "803DF6186900060F85F0000000",
+                                               "B8BC4FEA78E9BE040000909090", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x00002A0AF");
+        OcTestKernelPatch (Kernel, KernelSize, "BE0400000089F04489FB4489D9",
+                                               "BE1D00008089F04489FB4489D9", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x00002A2C1");
+        OcTestKernelPatch (Kernel, KernelSize, "C1E81AFFC0",
+                                               "B804000000", "_cpuid_set_info | Force cpuid_cores_per_package", "0x00002A2F8");
+        OcTestKernelPatch (Kernel, KernelSize, "3C137720",
+                                               "3C13EB20", "_lapic_init | Remove version check panic", "0x0000D8483");
+        OcTestKernelPatch (Kernel, KernelSize, "8B1523CC5600",
+                                               "BAFFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x0000D8DBB");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x000037D2D8");
+        break;
+      case KERNEL_BUILD_DEBUG:
+        DEBUG ((DEBUG_INFO, "OC: Found DEBUG Snow Leopard kernel.\n"));
+        OcTestKernelPatch (Kernel, KernelSize, "B88B00000089C7E8C6020000",
+                                               "48C7C0BA0000009090909090", "_cpuid_set_generic_info | Replace rdmsr(0x8B) with constant 186", "0x0000138DDE");
+        OcTestKernelPatch (Kernel, KernelSize, "488B45F88A404C0FB6C083F806",
+                                               "C745ECBC4FEA78E9AE00000090", "_cpuid_set_cpufamily | Force CPUFAMILY_INTEL_PENRYN", "0x0000139113");
+        OcTestKernelPatch (Kernel, KernelSize, "C745C8040000008B4DC4894DD04889C7E804040000",
+                                               "C745C81D0000808B4DC4894DD04889C7E804040000", "_cpuid_set_cache_info | CPUID 0x8000001d instead of 4", "0x0000138327");
+        OcTestKernelPatch (Kernel, KernelSize, "8B154CD37400",
+                                               "BA0100000090", "_initTopoParms | Force dies_per_package to 1", "0x000013A0B2");
+        OcTestKernelPatch (Kernel, KernelSize, "C1E81A83C001",
+                                               "B80400000090", "_cpuid_set_info | Force cpuid_cores_per_package", "0x0000138378");
+        OcTestKernelPatch (Kernel, KernelSize, "81E1FF00000083F913",
+                                               "81E1FF000000909090", "_lapic_init | Remove version check panic", "0x0000163011");
+        OcTestKernelPatch (Kernel, KernelSize, "8B0D77C46B00",
+                                               "B9FFFFFFFF90", "mp.c | Increase TSC sync margin to prevent panic", "0x0000165943");
+        OcTestKernelPatch (Kernel, KernelSize, "47656E75696E65496E74656C00",
+                                               "41757468656E746963414D4400", "Strings Replace | GenuineIntel/AuthenticAMD Vendor", "0x000070E2A2");
+        break;
+      case KERNEL_BUILD_DEVELOPMENT:
+        DEBUG ((DEBUG_INFO, "OC: Found DEVELOPMENT Snow Leopard, skipping patches for now.\n"));
+        break;
+      default:
+        break;
+    }
   } else {
   // For any other detected unsupported version
     DEBUG ((
@@ -1376,13 +1640,15 @@ OcKernelProcessPrelinked (
     //
     // Dump the buffer after context initialization but before any modifications.
     //
-    OcKernelDumpBuffer (
+    if (gMiscDebugPatchedKernelDump) {
+     OcKernelDumpBuffer (
       Kernel,
       *KernelSize,
       DUMP_TYPE_PREPROCESSED,
       KERNEL_TYPE_PRELINKED,
       DarwinVersion
       );
+    }
     
     OcKernelBlockKexts (Config, DarwinVersion, Is32Bit, CacheTypePrelinked, &Context);
 
@@ -1922,10 +2188,16 @@ OcKernelFileOpen (
          || (OcStriStr (FileName, L"prelinkedkernel") != NULL))
       {
         CurrentKernelType = KERNEL_TYPE_PRELINKED;
-        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+        DEBUG ((DEBUG_INFO, "OC: Will Dump %s if Misc->Debug->PatchedKernelDump is TRUE.\n", FileName));
+        if (gMiscDebugPatchedKernelDump) {
+          OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+        }
       } else {
         CurrentKernelType = KERNEL_TYPE_PLAIN;
-        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+        DEBUG ((DEBUG_INFO, "OC: Will Dump %s if Misc->Debug->PatchedKernelDump is TRUE.\n", FileName));
+        if (gMiscDebugPatchedKernelDump) {
+          OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, CurrentKernelType, mOcDarwinVersion);
+        }
       }
 
       //
@@ -1967,7 +2239,9 @@ OcKernelFileOpen (
 
       // Dump modified buffer
       if (!EFI_ERROR (OcKernelApplyPatches)) {
-        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, CurrentKernelType, mOcDarwinVersion);
+        if (gMiscDebugPatchedKernelDump) {
+          OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, CurrentKernelType, mOcDarwinVersion);
+        }
       }
 
       PrelinkedStatus = OcKernelProcessPrelinked (
@@ -2000,7 +2274,10 @@ OcKernelFileOpen (
         return EFI_OUT_OF_RESOURCES;
       }
 
-      OcDumpVirtualizedKernel (Kernel, KernelSize);
+      DEBUG ((DEBUG_INFO, "OC: Will Dump Virtualized %s if Misc->Debug->PatchedKernelDump is TRUE.\n", FileName));
+      if (gMiscDebugPatchedKernelDump) {
+        OcDumpVirtualizedKernel (Kernel, KernelSize);
+      }
 
       //
       // Scan for signatures to verify kernel contents.
@@ -2036,7 +2313,9 @@ OcKernelFileOpen (
     //
     // Dump kernel before patching.
     //
-    OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
+    if (gMiscDebugPatchedKernelDump) {
+      OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PREPATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
+    }
 
     OcKernelLoadKextsAndReserve (
       This,
@@ -2090,7 +2369,9 @@ OcKernelFileOpen (
       DEBUG ((DEBUG_INFO, "OC: Mkext status - %r\n", Status));
 
       if (!EFI_ERROR (Status)) {
-        OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
+        if (gMiscDebugPatchedKernelDump) {
+          OcKernelDumpBuffer (Kernel, KernelSize, DUMP_TYPE_PATCHED, KERNEL_TYPE_MKEXT, mOcDarwinVersion);
+        }
       }
 
       if (!EFI_ERROR (Status)) {
@@ -2111,7 +2392,10 @@ OcKernelFileOpen (
           return EFI_OUT_OF_RESOURCES;
         }
 
-        OcDumpVirtualizedKernel (Kernel, KernelSize);
+        DEBUG ((DEBUG_INFO, "OC: Will Dump Virtualized %s if Misc->Debug->PatchedKernelDump is TRUE.\n", FileName));
+        if (gMiscDebugPatchedKernelDump) {
+          OcDumpVirtualizedKernel (Kernel, KernelSize);
+        }
 
         //
         // Scan for signatures to verify kernel contents.
